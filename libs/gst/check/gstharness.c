@@ -195,9 +195,10 @@ static GstFlowReturn
 gst_harness_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
   GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
-  GstHarnessPrivate *priv = h->priv;
+  GstHarnessPrivate *priv = NULL;
   (void) parent;
   g_assert (h != NULL);
+  priv = h->priv;
   g_mutex_lock (&priv->blocking_push_mutex);
   g_atomic_int_inc (&priv->recv_buffers);
 
@@ -218,9 +219,10 @@ static gboolean
 gst_harness_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
   GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
-  GstHarnessPrivate *priv = h->priv;
+  GstHarnessPrivate *priv = NULL;
   (void) parent;
   g_assert (h != NULL);
+  priv = h->priv;
   g_atomic_int_inc (&priv->recv_upstream_events);
   g_async_queue_push (priv->src_event_queue, event);
   return TRUE;
@@ -230,11 +232,12 @@ static gboolean
 gst_harness_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
   GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
-  GstHarnessPrivate *priv = h->priv;
+  GstHarnessPrivate *priv = NULL;
   gboolean ret = TRUE;
   gboolean forward;
 
   g_assert (h != NULL);
+  priv = h->priv;
   (void) parent;
   g_atomic_int_inc (&priv->recv_events);
 
@@ -341,10 +344,10 @@ static gboolean
 gst_harness_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
   GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
-  GstHarnessPrivate *priv = h->priv;
+  GstHarnessPrivate *priv = NULL;
   gboolean res = TRUE;
   g_assert (h != NULL);
-
+  priv = h->priv;
   // FIXME: forward all queries?
 
   switch (GST_QUERY_TYPE (query)) {
@@ -411,9 +414,10 @@ static gboolean
 gst_harness_src_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
   GstHarness *h = g_object_get_data (G_OBJECT (pad), HARNESS_KEY);
-  GstHarnessPrivate *priv = h->priv;
+  GstHarnessPrivate *priv = NULL;
   gboolean res = TRUE;
   g_assert (h != NULL);
+  priv = h->priv;
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_LATENCY:
@@ -940,10 +944,13 @@ gst_harness_add_parse (GstHarness * h, const gchar * launchline)
   iter = gst_bin_iterate_sinks (bin);
   while (!done) {
     GValue item = { 0, };
+    GstObject *obj = NULL;
 
     switch (gst_iterator_next (iter, &item)) {
       case GST_ITERATOR_OK:
-        turn_async_and_sync_off (GST_ELEMENT (g_value_get_object (&item)));
+        obj = g_value_get_object (&item);
+        if (obj)
+          turn_async_and_sync_off (GST_ELEMENT (g_value_get_object (&item)));
         g_value_reset (&item);
         break;
       case GST_ITERATOR_DONE:
@@ -2001,7 +2008,7 @@ gst_harness_query_latency (GstHarness * h)
 
   query = gst_query_new_latency ();
 
-  if (gst_pad_peer_query (h->sinkpad, query)) {
+  if (query && h && gst_pad_peer_query (h->sinkpad, query)) {
     gst_query_parse_latency (query, &is_live, &min, &max);
   }
   gst_query_unref (query);
@@ -2428,7 +2435,7 @@ gst_harness_find_element (GstHarness * h, const gchar * element_name)
         GstElement *element = g_value_get_object (&data);
         GstPluginFeature *feature =
             GST_PLUGIN_FEATURE (gst_element_get_factory (element));
-        if (!strcmp (element_name, gst_plugin_feature_get_name (feature))) {
+        if (feature && !strcmp (element_name, gst_plugin_feature_get_name (feature))) {
           gst_iterator_free (iter);
           return element;
         }
