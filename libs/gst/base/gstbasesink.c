@@ -3488,23 +3488,35 @@ gst_base_sink_chain_unlocked (GstBaseSink * basesink, GstPad * pad,
   segment = &basesink->segment;
 
   if (G_UNLIKELY (!basesink->have_newsegment)) {
-    gboolean sync;
+    if (GST_BUFFER_PTS(sync_buf) == GST_CLOCK_TIME_NONE
+        && GST_BUFFER_DURATION(sync_buf) == GST_CLOCK_TIME_NONE) {
+      /* In multi-resolution case, the omxvideodec will push
+       * one more gst-buffer to reclaim the buffer held by Waylandsink.
+       * But sometimes the gst-buffer is pushed earlier than the new
+       * segment event, which will lead to get wrong position when seek
+       * frequently
+       */
+      GST_DEBUG_OBJECT (basesink, "No need to set have_newsegment for multi-resolution now");
+    } else {
+      gboolean sync;
 
-    sync = gst_base_sink_get_sync (basesink);
-    if (sync) {
-      GST_ELEMENT_WARNING (basesink, STREAM, FAILED,
-          (_("Internal data flow problem.")),
-          ("Received buffer without a new-segment. Assuming timestamps start from 0."));
+      sync = gst_base_sink_get_sync (basesink);
+      if (sync) {
+        GST_ELEMENT_WARNING (basesink, STREAM, FAILED,
+            (_("Internal data flow problem.")),
+            ("Received buffer without a new-segment. Assuming timestamps start from 0."));
+      }
+
+      /* this means this sink will assume timestamps start from 0 */
+      GST_OBJECT_LOCK (basesink);
+      segment->start = 0;
+      segment->stop = -1;
+      basesink->segment.start = 0;
+      basesink->segment.stop = -1;
+      basesink->have_newsegment = TRUE;
+      GST_OBJECT_UNLOCK (basesink);
+
     }
-
-    /* this means this sink will assume timestamps start from 0 */
-    GST_OBJECT_LOCK (basesink);
-    segment->start = 0;
-    segment->stop = -1;
-    basesink->segment.start = 0;
-    basesink->segment.stop = -1;
-    basesink->have_newsegment = TRUE;
-    GST_OBJECT_UNLOCK (basesink);
   }
 
   bclass = GST_BASE_SINK_GET_CLASS (basesink);
