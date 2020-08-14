@@ -28,6 +28,9 @@ AM_MAINTAINER_MODE([enable])
 dnl sets host_* variables
 AC_CANONICAL_HOST
 
+dnl PKG_CONFIG_SYSROOT_DIR is a valid environment variable
+m4_pattern_allow(PKG_CONFIG_SYSROOT_DIR)
+
 dnl use pretty build output by default
 AM_SILENT_RULES([yes])
 
