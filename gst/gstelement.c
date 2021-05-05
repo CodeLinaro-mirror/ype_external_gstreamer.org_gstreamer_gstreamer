@@ -88,6 +88,7 @@
 #include "gstbus.h"
 #include "gsterror.h"
 #include "gstevent.h"
+#include "gstghostpad.h"
 #include "gstutils.h"
 #include "gstinfo.h"
 #include "gstquark.h"
@@ -152,6 +153,7 @@ static void gst_element_call_async_func (gpointer data, gpointer user_data);
 static GstObjectClass *parent_class = NULL;
 static guint gst_element_signals[LAST_SIGNAL] = { 0 };
 
+static GMutex _element_pool_lock;
 static GThreadPool *gst_element_pool = NULL;
 
 /* this is used in gstelementfactory.c:gst_element_register() */
@@ -187,19 +189,22 @@ gst_element_get_type (void)
   return gst_element_type;
 }
 
-static void
+static GThreadPool *
 gst_element_setup_thread_pool (void)
 {
   GError *err = NULL;
+  GThreadPool *pool;
 
   GST_DEBUG ("creating element thread pool");
-  gst_element_pool =
+  pool =
       g_thread_pool_new ((GFunc) gst_element_call_async_func, NULL, -1, FALSE,
       &err);
   if (err != NULL) {
     g_critical ("could not alloc threadpool %s", err->message);
     g_clear_error (&err);
   }
+
+  return pool;
 }
 
 static void
@@ -266,8 +271,6 @@ gst_element_class_init (GstElementClass * klass)
   klass->set_context = GST_DEBUG_FUNCPTR (gst_element_set_context_default);
 
   klass->elementfactory = NULL;
-
-  gst_element_setup_thread_pool ();
 }
 
 static void
@@ -799,6 +802,16 @@ gst_element_remove_pad (GstElement * element, GstPad * pad)
       gst_pad_unlink (peer, pad);
 
     gst_object_unref (peer);
+  }
+
+  /* if this is a ghost pad we also need to unset the target or it
+   * will stay linked although not allowed according to the topology.
+   *
+   * FIXME 2.0: Do this generically somehow from inside GstGhostPad
+   * when it gets unparented.
+   */
+  if (GST_IS_GHOST_PAD (pad)) {
+    gst_ghost_pad_set_target (GST_GHOST_PAD (pad), NULL);
   }
 
   GST_OBJECT_LOCK (element);
@@ -3728,16 +3741,22 @@ gst_element_call_async (GstElement * element, GstElementCallAsyncFunc func,
   async_data->user_data = user_data;
   async_data->destroy_notify = destroy_notify;
 
-  g_thread_pool_push (gst_element_pool, async_data, NULL);
+  g_mutex_lock (&_element_pool_lock);
+  if (G_UNLIKELY (gst_element_pool == NULL))
+    gst_element_pool = gst_element_setup_thread_pool ();
+  g_thread_pool_push ((GThreadPool *) gst_element_pool, async_data, NULL);
+  g_mutex_unlock (&_element_pool_lock);
 }
 
 void
 _priv_gst_element_cleanup (void)
 {
+  g_mutex_lock (&_element_pool_lock);
   if (gst_element_pool) {
-    g_thread_pool_free (gst_element_pool, FALSE, TRUE);
-    gst_element_setup_thread_pool ();
+    g_thread_pool_free ((GThreadPool *) gst_element_pool, FALSE, TRUE);
+    gst_element_pool = NULL;
   }
+  g_mutex_unlock (&_element_pool_lock);
 }
 
 GstStructure *

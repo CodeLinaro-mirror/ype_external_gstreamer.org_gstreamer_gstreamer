@@ -1065,11 +1065,11 @@ gst_value_compare_g_value_array (const GValue * value1, const GValue * value2)
   guint i;
   GValueArray *array1 = value1->data[0].v_pointer;
   GValueArray *array2 = value2->data[0].v_pointer;
-  guint len = array1->n_values;
+  guint len = array1 ? array1->n_values : 0;
   GValue *v1;
   GValue *v2;
 
-  if (len != array2->n_values)
+  if (len != (array2 ? array2->n_values : 0))
     return GST_VALUE_UNORDERED;
 
   for (i = 0; i < len; i++) {
@@ -2577,8 +2577,7 @@ _priv_gst_value_parse_value (gchar * str,
       if (G_UNLIKELY (!_priv_gst_value_parse_string (s, &value_end, &s, TRUE)))
         return FALSE;
       /* Set NULL terminator for deserialization */
-      c = *value_end;
-      *value_end = '\0';
+      value_s = g_strndup (value_s, value_end - value_s);
 
       for (i = 0; i < G_N_ELEMENTS (try_types); i++) {
         g_value_init (value, try_types[i]);
@@ -2594,14 +2593,13 @@ _priv_gst_value_parse_value (gchar * str,
                   (type != G_TYPE_STRING))))
         return FALSE;
       /* Set NULL terminator for deserialization */
-      c = *value_end;
-      *value_end = '\0';
+      value_s = g_strndup (value_s, value_end - value_s);
 
       ret = gst_value_deserialize (value, value_s);
       if (G_UNLIKELY (!ret))
         g_value_unset (value);
     }
-    *value_end = c;
+    g_free (value_s);
   }
 
   *after = s;

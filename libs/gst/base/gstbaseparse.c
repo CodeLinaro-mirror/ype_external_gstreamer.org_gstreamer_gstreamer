@@ -3085,6 +3085,7 @@ gst_base_parse_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       GST_DEBUG ("All the buffer is skipped");
       parse->priv->offset += bsize;
       parse->priv->sync_offset = parse->priv->offset;
+      gst_buffer_unref (buffer);
       return GST_FLOW_OK;
     }
     buffer = gst_buffer_make_writable (buffer);
@@ -3306,6 +3307,22 @@ done:
   return ret;
 }
 
+/* Return the number of bytes available in the cached
+ * read buffer, if any */
+static guint
+gst_base_parse_get_cached_available (GstBaseParse * parse)
+{
+  if (parse->priv->cache != NULL) {
+    gint64 cache_offset = GST_BUFFER_OFFSET (parse->priv->cache);
+    gint cache_size = gst_buffer_get_size (parse->priv->cache);
+
+    if (parse->priv->offset >= cache_offset
+        && parse->priv->offset < cache_offset + cache_size)
+      return cache_size - (parse->priv->offset - cache_offset); /* Size of the cache minus consumed */
+  }
+  return 0;
+}
+
 /* pull @size bytes at current offset,
  * i.e. at least try to and possibly return a shorter buffer if near the end */
 static GstFlowReturn
@@ -3327,6 +3344,9 @@ gst_base_parse_pull_range (GstBaseParse * parse, guint size,
       *buffer = gst_buffer_copy_region (parse->priv->cache, GST_BUFFER_COPY_ALL,
           parse->priv->offset - cache_offset, size);
       GST_BUFFER_OFFSET (*buffer) = parse->priv->offset;
+      GST_LOG_OBJECT (parse,
+          "Satisfying read request of %u bytes from cached buffer with offset %"
+          G_GINT64_FORMAT, size, cache_offset);
       return GST_FLOW_OK;
     }
     /* not enough data in the cache, free cache and get a new one */
@@ -3335,9 +3355,13 @@ gst_base_parse_pull_range (GstBaseParse * parse, guint size,
   }
 
   /* refill the cache */
+  size = MAX (64 * 1024, size);
+  GST_LOG_OBJECT (parse,
+      "Reading cache buffer of %u bytes from offset %" G_GINT64_FORMAT,
+      size, parse->priv->offset);
   ret =
-      gst_pad_pull_range (parse->sinkpad, parse->priv->offset, MAX (size,
-          64 * 1024), &parse->priv->cache);
+      gst_pad_pull_range (parse->sinkpad, parse->priv->offset, size,
+      &parse->priv->cache);
   if (ret != GST_FLOW_OK) {
     parse->priv->cache = NULL;
     return ret;
@@ -3353,6 +3377,8 @@ gst_base_parse_pull_range (GstBaseParse * parse, guint size,
 
     return GST_FLOW_OK;
   }
+
+  GST_BUFFER_OFFSET (parse->priv->cache) = parse->priv->offset;
 
   *buffer =
       gst_buffer_copy_region (parse->priv->cache, GST_BUFFER_COPY_ALL, 0, size);
@@ -3425,7 +3451,7 @@ exit:
 
 /* PULL mode:
  * pull and scan for next frame starting from current offset
- * ajusts sync, drain and offset going along */
+ * adjusts sync, drain and offset going along */
 static GstFlowReturn
 gst_base_parse_scan_frame (GstBaseParse * parse, GstBaseParseClass * klass)
 {
@@ -3440,9 +3466,12 @@ gst_base_parse_scan_frame (GstBaseParse * parse, GstBaseParseClass * klass)
 
   /* let's make this efficient for all subclass once and for all;
    * maybe it does not need this much, but in the latter case, we know we are
-   * in pull mode here and might as well try to read and supply more anyway
-   * (so does the buffer caching mechanism) */
-  fsize = 64 * 1024;
+   * in pull mode here and might as well try to read and supply more anyway,
+   * so start with the cached buffer, or if that's shrunk below 1024 bytes,
+   * pull a new cache buffer */
+  fsize = gst_base_parse_get_cached_available (parse);
+  if (fsize < 1024)
+    fsize = 64 * 1024;
 
   while (TRUE) {
     min_size = MAX (parse->priv->min_frame_size, fsize);
@@ -3470,7 +3499,8 @@ gst_base_parse_scan_frame (GstBaseParse * parse, GstBaseParseClass * klass)
           GST_ERROR_OBJECT (parse, "Failed to detect format but draining");
           return GST_FLOW_ERROR;
         } else {
-          fsize += 64 * 1024;
+          /* Double our frame size, or increment by at most 64KB */
+          fsize += MIN (fsize, 64 * 1024);
           gst_buffer_unref (buffer);
           continue;
         }
@@ -3501,18 +3531,20 @@ gst_base_parse_scan_frame (GstBaseParse * parse, GstBaseParseClass * klass)
       GST_LOG_OBJECT (parse, "frame finished, breaking loop");
       break;
     }
-    /* nothing flushed, no skip and draining, so nothing left to do */
-    if (!skip && parse->priv->drain) {
-      GST_LOG_OBJECT (parse, "no activity or result when draining; "
-          "breaking loop and marking EOS");
-      ret = GST_FLOW_EOS;
-      break;
-    }
-    /* otherwise, get some more data
-     * note that is checked this does not happen indefinitely */
     if (!skip) {
+      if (parse->priv->drain) {
+        /* nothing flushed, no skip and draining, so nothing left to do */
+        GST_LOG_OBJECT (parse, "no activity or result when draining; "
+            "breaking loop and marking EOS");
+        ret = GST_FLOW_EOS;
+        break;
+      }
+      /* otherwise, get some more data
+       * note that is checked this does not happen indefinitely */
       GST_LOG_OBJECT (parse, "getting some more data");
-      fsize += 64 * 1024;
+
+      /* Double our frame size, or increment by at most 64KB */
+      fsize += MIN (fsize, 64 * 1024);
     }
     parse->priv->drain = FALSE;
   }
@@ -3795,6 +3827,8 @@ void
 gst_base_parse_set_duration (GstBaseParse * parse,
     GstFormat fmt, gint64 duration, gint interval)
 {
+  gint64 old_duration;
+
   g_return_if_fail (parse != NULL);
 
   if (parse->priv->upstream_has_duration) {
@@ -3802,14 +3836,8 @@ gst_base_parse_set_duration (GstBaseParse * parse,
     goto exit;
   }
 
-  if (duration != parse->priv->duration) {
-    GstMessage *m;
+  old_duration = parse->priv->duration;
 
-    m = gst_message_new_duration_changed (GST_OBJECT (parse));
-    gst_element_post_message (GST_ELEMENT (parse), m);
-
-    /* TODO: what about duration tag? */
-  }
   parse->priv->duration = duration;
   parse->priv->duration_fmt = fmt;
   GST_DEBUG_OBJECT (parse, "set duration: %" G_GINT64_FORMAT, duration);
@@ -3821,6 +3849,14 @@ gst_base_parse_set_duration (GstBaseParse * parse,
   }
   GST_DEBUG_OBJECT (parse, "set update interval: %d", interval);
   parse->priv->update_interval = interval;
+  if (duration != old_duration) {
+    GstMessage *m;
+
+    m = gst_message_new_duration_changed (GST_OBJECT (parse));
+    gst_element_post_message (GST_ELEMENT (parse), m);
+
+    /* TODO: what about duration tag? */
+  }
 exit:
   return;
 }

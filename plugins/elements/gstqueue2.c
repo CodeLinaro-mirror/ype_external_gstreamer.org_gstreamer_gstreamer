@@ -49,6 +49,12 @@
  *
  * The temp-location property will be used to notify the application of the
  * allocated filename.
+ *
+ * If the #GstQueue2:use-buffering property is set to TRUE, and any writable
+ * property is modified, #GstQueue2 will attempt to post a buffering message
+ * if the changes to the properties also cause the buffering percentage to be
+ * changed (for example, because the queue's capacity was changed and it already
+ * contains some data).
  */
 
 #ifdef HAVE_CONFIG_H
@@ -305,7 +311,8 @@ static gboolean gst_queue2_is_filled (GstQueue2 * queue);
 
 static void update_cur_level (GstQueue2 * queue, GstQueue2Range * range);
 static void update_in_rates (GstQueue2 * queue, gboolean force);
-static GstMessage *gst_queue2_get_buffering_message (GstQueue2 * queue);
+static GstMessage *gst_queue2_get_buffering_message (GstQueue2 * queue,
+    gint * percent);
 static void gst_queue2_post_buffering (GstQueue2 * queue);
 
 typedef enum
@@ -1118,7 +1125,7 @@ get_buffering_stats (GstQueue2 * queue, gint percent, GstBufferingMode * mode,
 
 /* Called with the lock taken */
 static GstMessage *
-gst_queue2_get_buffering_message (GstQueue2 * queue)
+gst_queue2_get_buffering_message (GstQueue2 * queue, gint * percent)
 {
   GstMessage *msg = NULL;
   if (queue->percent_changed) {
@@ -1135,17 +1142,14 @@ gst_queue2_get_buffering_message (GstQueue2 * queue)
      * the queue becomes empty for a short period of time. */
     if (!queue->waiting_del
         && queue->last_posted_buffering_percent != queue->buffering_percent) {
-      gint percent = queue->buffering_percent;
+      *percent = queue->buffering_percent;
 
-      GST_DEBUG_OBJECT (queue, "Going to post buffering: %d%%", percent);
-      msg = gst_message_new_buffering (GST_OBJECT_CAST (queue), percent);
+      GST_DEBUG_OBJECT (queue, "Going to post buffering: %d%%", *percent);
+      msg = gst_message_new_buffering (GST_OBJECT_CAST (queue), *percent);
 
       gst_message_set_buffering_stats (msg, queue->mode, queue->avg_in,
           queue->avg_out, queue->buffering_left);
-
-      queue->last_posted_buffering_percent = percent;
     }
-    queue->percent_changed = FALSE;
   }
 
   return msg;
@@ -1155,14 +1159,29 @@ static void
 gst_queue2_post_buffering (GstQueue2 * queue)
 {
   GstMessage *msg = NULL;
+  gint percent = -1;
 
   g_mutex_lock (&queue->buffering_post_lock);
   GST_QUEUE2_MUTEX_LOCK (queue);
-  msg = gst_queue2_get_buffering_message (queue);
+  msg = gst_queue2_get_buffering_message (queue, &percent);
   GST_QUEUE2_MUTEX_UNLOCK (queue);
 
-  if (msg != NULL)
-    gst_element_post_message (GST_ELEMENT_CAST (queue), msg);
+  if (msg != NULL) {
+    if (gst_element_post_message (GST_ELEMENT_CAST (queue), msg)) {
+      GST_QUEUE2_MUTEX_LOCK (queue);
+      /* Set these states only if posting the message succeeded. Otherwise,
+       * this post attempt failed, and the next one won't be done, because
+       * gst_queue2_get_buffering_message() checks these states and decides
+       * based on their values that it won't produce a message. */
+      queue->last_posted_buffering_percent = percent;
+      if (percent == queue->buffering_percent)
+        queue->percent_changed = FALSE;
+      GST_QUEUE2_MUTEX_UNLOCK (queue);
+      GST_DEBUG_OBJECT (queue, "successfully posted %d%% buffering message",
+          percent);
+    } else
+      GST_DEBUG_OBJECT (queue, "could not post buffering message");
+  }
 
   g_mutex_unlock (&queue->buffering_post_lock);
 }
@@ -2178,14 +2197,33 @@ gst_queue2_create_write (GstQueue2 * queue, GstBuffer * buffer)
     /* update the buffering status */
     if (queue->use_buffering) {
       GstMessage *msg;
+      gint percent = -1;
       update_buffering (queue);
-      msg = gst_queue2_get_buffering_message (queue);
+      msg = gst_queue2_get_buffering_message (queue, &percent);
       if (msg) {
+        gboolean post_ok;
+
         GST_QUEUE2_MUTEX_UNLOCK (queue);
+
         g_mutex_lock (&queue->buffering_post_lock);
-        gst_element_post_message (GST_ELEMENT_CAST (queue), msg);
-        g_mutex_unlock (&queue->buffering_post_lock);
+        post_ok = gst_element_post_message (GST_ELEMENT_CAST (queue), msg);
+
         GST_QUEUE2_MUTEX_LOCK (queue);
+
+        if (post_ok) {
+          /* Set these states only if posting the message succeeded. Otherwise,
+           * this post attempt failed, and the next one won't be done, because
+           * gst_queue2_get_buffering_message() checks these states and decides
+           * based on their values that it won't produce a message. */
+          queue->last_posted_buffering_percent = percent;
+          if (percent == queue->buffering_percent)
+            queue->percent_changed = FALSE;
+          GST_DEBUG_OBJECT (queue, "successfully posted %d%% buffering message",
+              percent);
+        } else {
+          GST_DEBUG_OBJECT (queue, "could not post buffering message");
+        }
+        g_mutex_unlock (&queue->buffering_post_lock);
       }
     }
 

@@ -1,5 +1,5 @@
 project('gstreamer', 'c',
-  version : '1.16.2',
+  version : '1.16.3',
   meson_version : '>= 0.47',
   default_options : [ 'warning_level=1',
                       'buildtype=debugoptimized' ])
@@ -171,7 +171,7 @@ host_defines = [
   [ 's390', 'HAVE_CPU_S390' ],
 ]
 foreach h : host_defines
-  if h.get(0) == host_machine.cpu()
+  if h.get(0) == host_machine.cpu_family()
     cdata.set(h.get(1), 1)
   endif
 endforeach

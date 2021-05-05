@@ -132,6 +132,7 @@ n_print (const char *format, ...)
 {
   va_list args;
   int i;
+  gchar *str;
 
   if (_name)
     g_print ("%s", _name);
@@ -140,8 +141,14 @@ n_print (const char *format, ...)
     g_print ("  ");
 
   va_start (args, format);
-  g_vprintf (format, args);
+  str = gst_info_strdup_vprintf (format, args);
   va_end (args);
+
+  if (!str)
+    return;
+
+  g_print ("%s", str);
+  g_free (str);
 }
 
 static gboolean
@@ -2077,11 +2084,16 @@ main (int argc, char *argv[])
   }
 #elif defined(G_OS_WIN32)
   {
+    /* g_log_writer_supports_color is available since 2.50.0 */
+#if GLIB_CHECK_VERSION(2,50,0)
     gint fd = _fileno (stdout);
     /* On Windows 10, g_log_writer_supports_color will also setup the console
      * so that it correctly interprets ANSI VT sequences if it's supported */
     if (!_isatty (fd) || !g_log_writer_supports_color (fd))
       colored_output = FALSE;
+#else
+    colored_output = FALSE;
+#endif
   }
 #endif
 

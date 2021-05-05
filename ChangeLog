@@ -1,3 +1,416 @@
+=== release 1.16.3 ===
+
+2020-10-21 14:41:22 +0100  Tim-Philipp Müller <tim@centricular.com>
+
+	* ChangeLog:
+	* NEWS:
+	* RELEASE:
+	* configure.ac:
+	* gstreamer.doap:
+	* meson.build:
+	  Release 1.16.3
+
+2020-10-21 14:41:22 +0100  Tim-Philipp Müller <tim@centricular.com>
+
+	* docs/plugins/inspect/plugin-coreelements.xml:
+	* docs/plugins/inspect/plugin-coretracers.xml:
+	  Update docs
+
+2020-10-21 14:41:20 +0100  Tim-Philipp Müller <tim@centricular.com>
+
+	* po/fr.po:
+	* po/pt_BR.po:
+	* po/ro.po:
+	* po/sr.po:
+	  Update translations
+
+2020-10-20 15:09:52 +0100  Tim-Philipp Müller <tim@centricular.com>
+
+	* README:
+	* common:
+	  Automatic update of common submodule
+	  From 59cb678 to a825d27
+
+2020-10-13 01:19:47 +0200  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* gst/gstvalue.c:
+	  gstvalue: don't write to const char *
+	  Our various deserializing functions require NULL terminators
+	  to not over consume substrings (eg fields of an array). Instead
+	  of writing a NULL terminator to the passed-in string, which may
+	  result in segfaults, make a copy of the substring we're interested
+	  in.
+	  Fixes https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/446
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/674>
+
+2020-10-09 12:13:15 +1100  Matthew Waters <matthew@centricular.com>
+
+	* meson.build:
+	  build: use cpu_family for arch checks
+	  e.g. on 32-bit arm, we may have armv6, armv7l, armv7hf, etc which all
+	  generally have the same layouts.  cpu_family() groups all of these into
+	  just 'arm' that the ABI check table is expecting.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/671>
+
+2020-04-01 15:41:49 +0200  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* tools/gst-launch.c:
+	  gst-launch: go back down to GST_STATE_NULL in one step.
+	  Going through each state on the way back down to GST_STATE_NULL
+	  can cause deadlocks, for example:
+	  gst-launch-1.0 audiotestsrc ! valve drop=true ! autoaudiosink
+	  ctrl + C
+	  Hangs forever when going to PAUSED, because the "final" state is
+	  ASYNC, and the sink blocks waiting for a preroll buffer.
+	  Going straight to NULL addresses this issue, and also helps
+	  making teardown faster when piping sparse streams to a
+	  sync sink.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/519>
+
+2020-06-18 15:52:40 +0700  Roman Shpuntov <roman.shpuntov@gmail.com>
+
+	* gst/gstsystemclock.c:
+	  systemclock: Fix clock time conversion on Windows/xbox
+	  The returned ratio can be bigger than GST_SECOND, in which case we would
+	  forever return 0 for the system clock time. Even in other cases if it's
+	  close to GST_SECOND it would result in accuracy loss.
+	  Instead of doing the division by GST_CLOCK_TIME_NONE during
+	  initialization once, do it every time the clock time is requested.
+	  Fixes https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/575
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/635>
+
+2020-03-09 21:31:48 +0200  Sebastian Dröge <sebastian@centricular.com>
+
+	* plugins/elements/gstidentity.c:
+	  identity: Use g_cond_signal() instead of g_cond_broadcast()
+	  There can only be a single waiter: on the streaming thread.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/397>
+
+2020-03-09 20:27:58 +0200  Sebastian Dröge <sebastian@centricular.com>
+
+	* plugins/elements/gstidentity.c:
+	  identity: Unblock condition variable on FLUSH_START
+	  ... and immediately return FLUSHING from the streaming thread instead of
+	  waiting potentially forever.
+	  Fixes https://gitlab.freedesktop.org/gstreamer/gstreamer/issues/516
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/397>
+
+2020-07-08 05:15:28 +0900  Seungha Yang <seungha@centricular.com>
+
+	* libs/gst/check/gstcheck.h:
+	  check: Use g_thread_yield instead of g_usleep(1)
+	  Since the commit
+	  https://gitlab.gnome.org/GNOME/glib/-/commit/01c02ac08b682de622930b1278c9c14d0ffe6c49,
+	  g_usleep(1) will be translated to Sleep(1) on Windows which means
+	  sleep in 1 millisecond. But GLib provides g_thread_yield() API
+	  which is exactly what we required here for thread context switching.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/644>
+
+2020-09-16 02:16:52 +0200  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* gst/gstmeta.c:
+	  gstmeta: intern registered impl string
+	  Subsequent lookups in the hashtable are probably better done
+	  on memory we're confident is allocated to us :)
+	  It was easy to trigger invalid reads by calling gst_meta_register
+	  with dynamically allocated memory, freeing that memory, then
+	  calling gst_meta_get_info()
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/647>
+
+2020-08-04 11:13:51 +0200  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* libs/gst/base/gstaggregator.c:
+	  aggregator: fix iteration direction in skip_buffers
+	  Subclasses use the pad segment to determine whether a buffer
+	  should be skipped, we thus don't want to check if a buffer
+	  needs to be skipped before processing the segment it's part
+	  of.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/646>
+
+2020-07-14 12:15:34 +0100  Tim-Philipp Müller <tim@centricular.com>
+
+	* gst/gstbuffer.c:
+	  buffer: improve seqnum fallback warning message
+	  Print target CPU we're building for.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/645>
+
+2020-07-14 12:11:57 +0100  Tim-Philipp Müller <tim@centricular.com>
+
+	* gst/gstbuffer.c:
+	  buffer: fix meta sequence number fallback on rpi
+	  The global seqnum variable wasn't actually increased in
+	  the fallback code path, leading to all buffers getting
+	  a seqnum of 0. Which also made the unit test fail.
+	  This affects platforms/toolchains that don't have
+	  64-bit atomic ops such as when compiling for armv7 rpi.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/645>
+
+2018-05-02 13:05:21 +0200  Christoph Reiter <reiter.christoph@gmail.com>
+
+	* gst/gstelementfactory.c:
+	  gstelementfactory: Fix missing features in case a feature moves to another filename
+	  In case a plugin filename was renamed with the plugin being in the registry cache
+	  the features were not loaded after the rename:
+	  1) Cache of old/gone filename was loaded, features added
+	  2) New filename was loaded, features where not added because
+	  they were already found in the registry.
+	  3) In the end stale cache entries for files which are no longer there
+	  are removed, including the wanted features.
+	  4) The cache gets updated without the features.
+	  Fix this by also checking at (2) that the found feature is from the loaded plugin
+	  and not from some stale cache entry.
+	  This affected directsoundsink where libgstdirectsoundsink.dll was renamed
+	  to libgstdirectsound.dll, losing the directsoundsink element in the process.
+	  Fixes #290
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/643>
+
+2020-07-02 11:21:27 +0300  Sebastian Dröge <sebastian@centricular.com>
+
+	* gst/gstelement.c:
+	  element: When removing a ghost pad also unset its target
+	  Otherwise the proxy pad of the ghost pad still stays linked to some
+	  element inside the bin, which is not allowed anymore according to the
+	  topology.
+	  In 2.0 this should be fixed more generically from inside GstGhostPad but
+	  currently there is no way to get notified that the ghost pad is
+	  unparented.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/642>
+
+2020-06-12 15:07:42 +0200  Edward Hervey <edward@centricular.com>
+
+	* gst/gstelement.c:
+	* gst/gsttask.c:
+	  gst: Delay creation of threadpools
+	  Since glib 2.64, gthreadpool will start waiting on a GCond immediately upon
+	  creation. This can cause issues if we fork *before* actually using the
+	  threadpool since we will then be signalling that GCond ... from another process
+	  and that will never work.
+	  Instead, delay creationg of thread pools until the very first time we need
+	  them. This introduces a minor (un-noticeable) delay when needing a new thread
+	  but fixes the issues for all users of GSTreamer that will call gst_init, then
+	  fork and actually start pipelines.
+	  See https://gitlab.gnome.org/GNOME/glib/-/issues/2131 for more context.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/634>
+
+2020-06-04 17:50:01 +0200  Camilo Celis Guzman <camilo@pexip.com>
+
+	* plugins/elements/gstqueue.c:
+	  queue: protect against lost wakeups for iterm_del condition
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/633>
+
+2020-06-23 05:18:11 +0530  Nirbheek Chauhan <nirbheek@centricular.com>
+
+	* gst/gstregistrychunks.c:
+	  registry: Print the pointer when printing features
+	  This is what we do everywhere else too, useful for debugging.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/636>
+
+2020-06-23 03:43:53 +0530  Nirbheek Chauhan <nirbheek@centricular.com>
+
+	* gst/gstregistry.c:
+	  registry: Use a toolchain-specific registry file on Windows
+	  If we load a plugin registry for MinGW plugins when running with MSVC,
+	  we will have to write out the whole cache again, and vice-versa. Just
+	  use separate cache files so that the cache is actually useful.
+	  Closes https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/427
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/636>
+
+2020-06-24 22:51:48 +0900  Seungha Yang <seungha@centricular.com>
+
+	* tools/gst-inspect.c:
+	  gst-inspect: Use gst_info_strdup_vprintf to print string
+	  g_vprintf() will write a string binary to stdout directly using fwrite().
+	  So, depending on character in the string, fwrite to stdout can
+	  print broken one but printf family might not cause the issue.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/637>
+
+2020-06-04 11:21:45 +0200  Edward Hervey <edward@centricular.com>
+
+	* plugins/elements/gstqueue2.c:
+	  queue2: Avoid races when posting buffering messages
+	  When posting a buffering message succesfully:
+	  * Remember the *actual* percentage value that was posted
+	  * Make sure we only reset the percent_changed variable if the value we just
+	  posted is indeed different from the current value
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/632>
+
+2020-05-20 17:32:48 +0200  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* plugins/elements/gstqueue2.c:
+	* tests/check/elements/queue2.c:
+	  queue2: don't post unnecessary buffering message, refine locking
+	  This is a follow up to review comments in !297
+	  + The posting of the buffering message in READY_TO_PAUSED isn't
+	  needed, removing it made the test fail, but the correct fix
+	  was simply to link elements together
+	  + Move code to relock the queue and set last_posted_buffering_percent
+	  and percent_changed inside the buffering_post_lock in create_write().
+	  This makes locking consistent with post_buffering()
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/297>
+
+2019-10-04 16:57:29 +0200  Carlos Rafael Giani <crg7475@mailbox.org>
+
+	* plugins/elements/gstqueue2.c:
+	* tests/check/elements/queue2.c:
+	  queue2: Fix missing/dropped buffering messages at startup
+	  This fixes a bug that occurs when an attempt is made to post a buffering
+	  message before the queue2 was assigned a bus. One common situation where
+	  this happens is when the use-buffering property is set to TRUE before the
+	  queue2 was added to a bin.
+	  If the result of gst_element_post_message() is not checked, and the
+	  aforementioned situation occurs, then last_posted_buffering_percent and
+	  percent_changed will still be updated, as if posting the message succeeded.
+	  Later attempts to post again will not do anything because the code then
+	  assumes that a message with the same percentage was previously posted
+	  successfully and posting again is redundant.
+	  Updating these variables only if posting succeed and explicitely
+	  posting a buffering message in the READY->PAUSED state change ensure that
+	  a buffering message is posted as early as possible.
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/297>
+
+2020-02-15 22:20:18 +0530  dhilshad <mohddhilshadm@gmail.com>
+
+	* plugins/elements/gstsparsefile.c:
+	  sparsefile: fix possible crash when seeking
+	  In gst_sparse_file_clear function we were closing a file and
+	  reopening it using closed file descriptor.
+	  Fix: Removed closing and reopening of file.
+	  Fixes #512
+	  Part-of: <https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/372>
+
+2020-04-12 20:33:43 -0400  Thibault Saunier <tsaunier@igalia.com>
+
+	* gst/gstvalue.c:
+	* tests/check/gst/gstvalue.c:
+	  value: Fix segfault comparing empty GValueArrays
+	  Adding a test
+
+2020-04-01 02:36:40 +1100  Jan Schmidt <jan@centricular.com>
+
+	* libs/gst/base/gstbaseparse.c:
+	* tests/check/libs/baseparse.c:
+	  baseparse: Fix upstream read caching
+	  When running in pull mode (for e.g. mp3 reading),
+	  baseparse currently reads 64KB from upstream, then mp3parse
+	  consumes typically around 417/418 bytes of it. Then
+	  on the next loop, it will read a full fresh 64KB again,
+	  which is a big waste.
+	  Fix the read loop to use the available cache buffer first
+	  before going for more data, until the cache drops to < 1KB.
+	  Fixes https://gitlab.freedesktop.org/gstreamer/gstreamer/issues/518
+
+2020-04-01 02:46:52 +1100  Jan Schmidt <jan@centricular.com>
+
+	* libs/gst/base/gstbaseparse.c:
+	  baseparse: Fix typo
+
+2020-03-22 09:47:35 +0100  Ondřej Hruška <ondra@ondrovo.com>
+
+	* gst/gstdatetime.c:
+	* tests/check/gst/gstdatetime.c:
+	  gstdatetime: Add missing NULL check to gst_date_time_new_local_time
+	  Also add a unit test for this.
+	  Fixes #524
+
+2020-03-03 15:36:26 +0100  Miguel Paris <mparisdiaz@gmail.com>
+
+	* gst/gstbufferlist.c:
+	* tests/check/gst/gstbufferlist.c:
+	  bufferlist: foreach: always remove as parent if buffer is changed
+	  In case the buffer is not writable, the parent (the BufferList) is not
+	  removed before calling func. So if it is changed, the parent (the BufferList)
+	  of the previous buffer should be removed after calling func.
+
+2020-03-13 12:14:08 +0100  Stéphane Cerveau <scerveau@collabora.com>
+
+	* plugins/elements/gstidentity.c:
+	  identity: Fix a minor leak using meta_str
+
+2020-03-11 22:39:35 +1100  Matthew Waters <matthew@centricular.com>
+
+	* libs/gst/base/gstbasetransform.c:
+	  basetransform: allow not passthrough if generate_output is implemented
+	  This allows an element to not require implementing transform or
+	  transform_ip.
+
+2020-03-03 18:49:36 +0900  Seungha Yang <seungha.yang@navercorp.com>
+
+	* tools/gst-launch.c:
+	  gst-launch: Follow up to missing s/g_print/gst_print/g
+	  Required to avoid broken log string on Windows but missed
+	  in the commit of 493a3261a9757b5ade7aec289eb07221966f9eed
+
+2020-02-26 22:29:43 +0900  Seungha Yang <seungha.yang@navercorp.com>
+
+	* tools/gst-inspect.c:
+	  gst-inspect: Add define guard for g_log_writer_supports_color()
+	  g_log_writer_supports_color() was introduced since GLib 2.50.0
+	  which is slightly higher version than our minimum required GLib version.
+
+2019-12-19 11:28:13 +0100  Matus Gajdos <matuszpd@gmail.com>
+
+	* libs/gst/base/gstbaseparse.c:
+	  baseparse: fix memory leak
+	  A buffer to be skipped wasn't unref'd in gst_base_parse_chain().
+	  Fixes #406
+
+2020-02-10 16:35:06 -0600  Zebediah Figura <z.figura12@gmail.com>
+
+	* libs/gst/base/gstbaseparse.c:
+	  baseparse: Set the private duration before posting a duration-changed message
+	  Otherwise an application cannot rely on a subsequent call to e.g. gst_pad_query_duration() succeeding.
+
+2020-02-12 12:32:05 +0200  Sebastian Dröge <sebastian@centricular.com>
+
+	* gst/gstbus.c:
+	  bus: Make setting/replacing/clearing the sync handler thread-safe
+	  Previously we would use the object lock only for storing the sync
+	  handler and its user_data in a local variable, then unlock it and only
+	  then call the sync handler. Between unlocking and calling the sync
+	  handler it might be unset and the user_data be freed, causing it to be
+	  called with a freed pointer.
+	  To prevent this add a refcounting wrapper struct around the sync
+	  handler, hold the object lock while retrieving it and increasing the
+	  reference count and only actually free it once the reference count
+	  reaches zero.
+	  As a side-effect we can now also allow to actually replace the sync
+	  handler. Previously it was only allowed to clear it after initially
+	  setting it according to the docs, but the code still allowed to clear it
+	  and then set a different one.
+	  Fixes https://gitlab.freedesktop.org/gstreamer/gstreamer/issues/506
+
+2019-04-30 17:24:50 -0400  Thibault Saunier <tsaunier@igalia.com>
+
+	* gst/gstdevicemonitor.c:
+	  device-monitor: list hidden providers before listing devices
+	  The way it was implemented could make the list updated after the
+	  list of device was filled with supposdely hidden devices
+
+2020-01-09 20:07:06 +0100  Jan Alexander Steffens (heftig) <jsteffens@make.tv>
+
+	* gst/gstbin.c:
+	  bin: Fix deep-element-removed log message
+	  child and bin were switched.
+	  https://gitlab.freedesktop.org/gstreamer/gstreamer/merge_requests/354
+
+2019-12-05 09:47:38 +0100  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* gst/gstelementfactory.c:
+	  Revert "element: Enforce that elements created by gst_element_factory_create/make() are floating"
+	  See https://gitlab.freedesktop.org/gstreamer/gstreamer/merge_requests/333
+	  The reference we receive when calling g_object_new should be
+	  floating, but we can't force it at our level.
+	  This reverts commit ce43de86902c4e9c8ed4e9682602664cb9bce2ee.
+
+2019-12-05 09:47:30 +0100  Mathieu Duponchelle <mathieu@centricular.com>
+
+	* gst/gstdevice.c:
+	  Revert "device: Enforce that elements created by gst_device_create_element() are floating"
+	  See https://gitlab.freedesktop.org/gstreamer/gstreamer/merge_requests/333
+	  The reference we receive when calling g_object_new should be
+	  floating, but we can't force it at our level.
+	  This reverts commit cc6342d853f4252c5d5cf09fff9d3379ad467fbc.
+
 === release 1.16.2 ===
 
 2019-12-03 10:57:30 +0000  Tim-Philipp Müller <tim@centricular.com>
