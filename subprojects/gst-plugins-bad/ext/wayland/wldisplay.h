@@ -62,6 +62,7 @@ struct _GstWlDisplay
   struct zwp_linux_dmabuf_v1 *dmabuf;
   GArray *shm_formats;
   GArray *dmabuf_formats;
+  guint64 server_modifier_caps;
 
   /* private */
   gboolean own_display;
