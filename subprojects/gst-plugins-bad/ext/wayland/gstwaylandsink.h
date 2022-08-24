@@ -63,6 +63,7 @@ struct _GstWaylandSink
   gboolean fullscreen;
 
   gchar *display_name;
+  gboolean disable_ubwc;
 
   gboolean redraw_pending;
   GMutex render_lock;
