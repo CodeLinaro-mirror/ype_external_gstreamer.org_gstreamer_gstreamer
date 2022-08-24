@@ -147,8 +147,28 @@ dmabuf_format (void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
     g_array_append_val (self->dmabuf_formats, format);
 }
 
+static void
+dmabuf_modifier(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1, uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
+{
+  GstWlDisplay *self = data;
+  guint64 modifier = ((uint64_t) modifier_hi << 32) | modifier_lo;
+  GST_INFO ("wayland server report format 0x%x(%"GST_FOURCC_FORMAT") modifier 0x%llx", format, GST_FOURCC_ARGS(format), modifier);
+  if (modifier == DRM_FORMAT_MOD_QCOM_COMPRESSED) {
+    if (format == DRM_FORMAT_NV12) {
+      self->server_modifier_caps |= 1;
+    }else if (format == GST_MAKE_FOURCC('Q','1','2','A')) {
+      self->server_modifier_caps |= 2;
+    }
+  }
+
+  if (gst_wl_dmabuf_format_to_video_format (format) != GST_VIDEO_FORMAT_UNKNOWN) {
+    g_array_append_val (self->dmabuf_formats, format);
+  }
+}
+
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
   dmabuf_format,
+  dmabuf_modifier,
 };
 
 gboolean
@@ -235,7 +255,7 @@ registry_handle_global (void *data, struct wl_registry *registry,
         wl_registry_bind (registry, id, &wp_viewporter_interface, 1);
   } else if (g_strcmp0 (interface, "zwp_linux_dmabuf_v1") == 0) {
     self->dmabuf =
-        wl_registry_bind (registry, id, &zwp_linux_dmabuf_v1_interface, 1);
+        wl_registry_bind (registry, id, &zwp_linux_dmabuf_v1_interface, version >= 3 ? 3 : 1);
     zwp_linux_dmabuf_v1_add_listener (self->dmabuf, &dmabuf_listener, self);
   }
 }
