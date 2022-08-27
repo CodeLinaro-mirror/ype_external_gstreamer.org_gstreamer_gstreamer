@@ -26,6 +26,10 @@
 #include <gst/video/video.h>
 
 #include <wayland-client.h>
+#include <wayland-egl.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <EGL/eglwaylandext.h>
 
 #include "wldisplay.h"
 #include "wlwindow.h"
@@ -64,6 +68,12 @@ struct _GstWaylandSink
 
   gchar *display_name;
   gboolean disable_ubwc;
+  /* EGL */
+  int csprotocol_choice;
+  EGLDisplay egldpy;
+  PFNEGLCREATEIMAGEKHRPROC eglCreateImage;
+  PFNEGLDESTROYIMAGEKHRPROC eglDestroyImage;
+  PFNEGLCREATEWAYLANDBUFFERFROMIMAGEWL eglCreateWaylandBufferFromImage;
 
   gboolean redraw_pending;
   GMutex render_lock;

@@ -9,6 +9,8 @@ wl_sources = [
 ]
 
 libdrm_dep = dependency('libdrm', version: '>= 2.4.55', required:get_option('wayland'))
+libwaylandegl_dep = dependency('wayland-egl')
+libegl_dep = dependency('egl')
 
 if use_wayland
     protocols_datadir = wl_protocol_dep.get_variable('pkgdatadir')
@@ -42,7 +44,7 @@ if use_wayland
         c_args : gst_plugins_bad_args + ['-DGST_USE_UNSTABLE_API'],
         include_directories : [configinc],
         dependencies : [gst_dep, gstvideo_dep, gstwayland_dep, gstallocators_dep,
-                        wl_client_dep, wl_protocol_dep, libdrm_dep],
+                        wl_client_dep, wl_protocol_dep, libdrm_dep, libwaylandegl_dep, libegl_dep],
         install : true,
         install_dir : plugins_install_dir,
     )
