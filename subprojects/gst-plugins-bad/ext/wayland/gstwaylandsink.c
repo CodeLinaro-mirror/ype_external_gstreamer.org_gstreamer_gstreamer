@@ -63,6 +63,7 @@ enum
 {
   PROP_0,
   PROP_DISABLE_UBWC,
+  PROP_CSPROTOCOL_CHOICE,
   PROP_DISPLAY,
   PROP_FULLSCREEN
 };
@@ -213,6 +214,11 @@ gst_wayland_sink_class_init (GstWaylandSinkClass * klass)
           "Disable UBWC in the video sink",
           FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_CSPROTOCOL_CHOICE,
+      g_param_spec_int ("csprotocol-choice", "wayland protocol choice",
+          "Decide wayland client-server protocol choice. 0: default behavior, 1: use eglimage solution if valid",
+          0, 1, 0, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_FULLSCREEN,
       g_param_spec_boolean ("fullscreen", "Fullscreen",
           "Whether the surface should be made fullscreen ", FALSE,
@@ -257,6 +263,11 @@ gst_wayland_sink_get_property (GObject * object,
       g_value_set_boolean (value, sink->disable_ubwc);
       GST_OBJECT_UNLOCK (sink);
       break;
+    case PROP_CSPROTOCOL_CHOICE:
+      GST_OBJECT_LOCK (sink);
+      g_value_set_int (value, sink->csprotocol_choice);
+      GST_OBJECT_UNLOCK (sink);
+      break;
     case PROP_FULLSCREEN:
       GST_OBJECT_LOCK (sink);
       g_value_set_boolean (value, sink->fullscreen);
@@ -285,6 +296,11 @@ gst_wayland_sink_set_property (GObject * object,
       sink->disable_ubwc = g_value_get_boolean (value);
       GST_OBJECT_UNLOCK (sink);
       break;
+    case PROP_CSPROTOCOL_CHOICE:
+      GST_OBJECT_LOCK (sink);
+      sink->csprotocol_choice = g_value_get_int (value);
+      GST_OBJECT_UNLOCK (sink);
+      break;
     case PROP_FULLSCREEN:
       GST_OBJECT_LOCK (sink);
       gst_wayland_sink_set_fullscreen (sink, g_value_get_boolean (value));
@@ -305,6 +321,8 @@ gst_wayland_sink_finalize (GObject * object)
 
   if (sink->last_buffer)
     gst_buffer_unref (sink->last_buffer);
+  if (sink->egldpy)
+    eglTerminate(sink->egldpy);
   if (sink->display)
     g_object_unref (sink->display);
   if (sink->window)
@@ -337,6 +355,54 @@ gst_wayland_sink_set_display_from_context (GstWaylandSink * sink,
         ("Failed to use the external wayland display: '%s'", error->message));
     g_error_free (error);
   }
+}
+
+static int
+gst_wayland_sink_setup_egl (GstWaylandSink * sink)
+{
+  int ret = 1;
+  if (sink->display) {
+    EGLDisplay egldpy;
+    int major = 0, minor = 0;
+    ret = 0;
+    /* Setup EGL */
+    //TODO: eglXXX function should be optimized as getting them through dlopen
+    egldpy = eglGetDisplay(sink->display->display);
+    if (egldpy == EGL_NO_DISPLAY) {//EGL_NO_DISPLAY is NULL indeed
+      GST_ERROR_OBJECT(sink, "Failed to eglGetDisplay");
+      return -1;
+    }
+    if (!eglInitialize(egldpy, &major, &minor)) {
+      sink->egldpy = EGL_NO_DISPLAY;
+      GST_ERROR_OBJECT(sink, "Failed to initialise EGLDisplay");
+      return -2;
+    }
+
+    sink->eglCreateImage =
+      (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    sink->eglDestroyImage =
+      (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    sink->eglCreateWaylandBufferFromImage =
+      (PFNEGLCREATEWAYLANDBUFFERFROMIMAGEWL)
+        eglGetProcAddress("eglCreateWaylandBufferFromImageWL");
+
+    if (sink->eglCreateImage == NULL || sink->eglDestroyImage == NULL) {
+      GST_ERROR_OBJECT(sink, "Failed to get EGL_KHR_image_base");
+      ret = -3;
+    }
+    if (sink->eglCreateWaylandBufferFromImage == NULL) {
+      GST_ERROR_OBJECT(sink, "Failed to get EGL_WL_create_wayland_buffer_from_image");
+      ret = -4;
+    }
+
+    if (ret != 0) {
+      eglTerminate(egldpy);
+    }else{
+      sink->egldpy = egldpy;
+      GST_INFO_OBJECT(sink, "Succeed to get egldpy %p", (void*)egldpy);
+    }
+  }
+  return ret;
 }
 
 static gboolean
@@ -384,6 +450,10 @@ gst_wayland_sink_find_display (GstWaylandSink * sink)
           ret = FALSE;
         }
       }
+    }
+    if (sink->csprotocol_choice == 1) {
+      int rt = gst_wayland_sink_setup_egl (sink);
+      GST_INFO_OBJECT (sink, "gst_wayland_sink_setup_egl() ret %d", rt);
     }
   }
 
@@ -443,9 +513,15 @@ gst_wayland_sink_change_state (GstElement * element, GstStateChange transition)
        * to avoid requesting them again from the application if/when we are
        * restarted (GstVideoOverlay behaves like that in other sinks)
        */
-      if (sink->display && !sink->window)       /* -> the window was toplevel */
-        g_clear_object (&sink->display);
+      if (sink->display && !sink->window) {     /* -> the window was toplevel */
+        /* MSM8996: Egldisplay should get destroyed before clearing the display object. */
+        if (sink->egldpy) {
+          eglTerminate(sink->egldpy);
+          sink->egldpy = EGL_NO_DISPLAY;//it's NULL indeed
+        }
 
+        g_clear_object (&sink->display);
+      }
       g_mutex_unlock (&sink->display_lock);
       g_clear_object (&sink->pool);
       break;
@@ -719,6 +795,85 @@ on_window_closed (GstWlWindow * window, gpointer user_data)
       ("Output window was closed"), (NULL));
 }
 
+struct wl_buffer *
+gst_wl_egl_dmabuf_construct_wl_buffer (GstBuffer * buf, GstWlDisplay * display,
+  const GstVideoInfo * info, GstWaylandSink * sink)
+{
+  EGLImageKHR eglimg;
+  struct wl_buffer *wlbuf = NULL;
+  EGLint attr[128] = {0}; //assume 128 is large enough
+  int pixel_mem_fd = -1;
+  int w = GST_VIDEO_INFO_WIDTH (info);
+  int h = GST_VIDEO_INFO_HEIGHT (info);
+  GstVideoFormat gstfmt = GST_VIDEO_INFO_FORMAT (info);
+
+  if (gstfmt == GST_VIDEO_FORMAT_NV12 || gstfmt == GST_VIDEO_FORMAT_P010_10LE || gstfmt == GST_VIDEO_FORMAT_NV12_10LE32) {
+    //yuv 2 plane format
+    EGLint attribs[] = {
+      EGL_WIDTH, 0,
+      EGL_HEIGHT, 0,
+      EGL_LINUX_DRM_FOURCC_EXT, gst_video_format_to_wl_dmabuf_format (gstfmt),
+      EGL_DMA_BUF_PLANE0_FD_EXT, 0,
+      EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+      EGL_DMA_BUF_PLANE1_FD_EXT, 0,
+      EGL_DMA_BUF_PLANE1_OFFSET_EXT, 0,
+      EGL_NONE};
+
+    pixel_mem_fd = gst_dmabuf_memory_get_fd (gst_buffer_peek_memory (buf, 0));
+
+    attribs[1]  = w;
+    attribs[3]  = h;
+    attribs[7]  = pixel_mem_fd;  //though only transmitted pixel data memory fd, egl will use internal pixel_fd/meta_fd table to get meta data fd, and transmit to server
+    attribs[9] = 0;  //plane0 offset always 0
+    attribs[11] = pixel_mem_fd;
+    attribs[13] = GST_VIDEO_INFO_PLANE_OFFSET (info, 1);
+    memcpy(attr, attribs, sizeof(attribs));
+  } else if (GST_VIDEO_FORMAT_INFO_IS_RGB(info)) {
+    //rgb 1 plane format
+    EGLint attribs[] = {
+      EGL_WIDTH, 0,
+      EGL_HEIGHT, 0,
+      EGL_LINUX_DRM_FOURCC_EXT, gst_video_format_to_wl_dmabuf_format (gstfmt),
+      EGL_DMA_BUF_PLANE0_FD_EXT, 0,
+      EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+      EGL_DMA_BUF_PLANE0_PITCH_EXT, 0,
+      EGL_NONE};
+
+    pixel_mem_fd = gst_dmabuf_memory_get_fd (gst_buffer_peek_memory (buf, 0));
+
+    attribs[1]  = w;
+    attribs[3]  = h;
+    attribs[7]  = pixel_mem_fd;
+    attribs[11] = GST_VIDEO_INFO_PLANE_STRIDE (info, 0);
+    memcpy(attr, attribs, sizeof(attribs));
+  }else{
+    GST_ERROR_OBJECT (sink, "Not supported format(%s) for egl, couldn't create wl_buffer from fd %d, gstbuf %p", gst_video_format_to_string (gstfmt), pixel_mem_fd, buf);
+    return NULL;
+  }
+
+  GST_DEBUG_OBJECT (display, "Creating wl_buffer from egl-DMABUF of size %"
+      G_GSSIZE_FORMAT " (%d x %d), format %s, fd %d, gstbuf %p, egl display %p", info->size, w, h,
+      gst_video_format_to_string (gstfmt), pixel_mem_fd, buf, sink->egldpy);
+
+  eglimg = sink->eglCreateImage(sink->egldpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL, attr);
+  if (eglimg == EGL_NO_IMAGE_KHR) {
+    GST_ERROR_OBJECT(sink, "failed to create EGLImage, couldn't create wl_buffer from fd %d, gstbuf %p", pixel_mem_fd, buf);
+    return NULL;
+  }
+
+  wlbuf = sink->eglCreateWaylandBufferFromImage(sink->egldpy, eglimg);
+  if (wlbuf) {
+    GST_DEBUG_OBJECT (sink, "Created egl wl_buffer (%p): %d x %d, fd %d, gstbuf %p", wlbuf, w, h, pixel_mem_fd, buf);
+    wl_proxy_set_queue((struct wl_proxy*)wlbuf, display->queue);
+  }else{
+    GST_ERROR_OBJECT (sink, "Can't create egl wl_buffer from: fd %d, gstbuf %p", pixel_mem_fd, buf);
+  }
+
+  sink->eglDestroyImage(sink->egldpy, eglimg);
+
+  return wlbuf;
+}
+
 static GstFlowReturn
 gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
 {
@@ -798,7 +953,10 @@ gst_wayland_sink_show_frame (GstVideoSink * vsink, GstBuffer * buffer)
       if (gst_is_dmabuf_memory (gst_buffer_peek_memory (buffer, i)))
         nb_dmabuf++;
 
-    if (nb_dmabuf && (nb_dmabuf == gst_buffer_n_memory (buffer)))
+    if (nb_dmabuf && sink->csprotocol_choice == 1 && sink->egldpy) {
+      wbuf = gst_wl_egl_dmabuf_construct_wl_buffer (buffer, sink->display, &sink->video_info, sink);
+    }
+    else if (nb_dmabuf && (nb_dmabuf == gst_buffer_n_memory (buffer)))
       wbuf = gst_wl_linux_dmabuf_construct_wl_buffer (buffer, sink->display,
           &sink->video_info);
   }
