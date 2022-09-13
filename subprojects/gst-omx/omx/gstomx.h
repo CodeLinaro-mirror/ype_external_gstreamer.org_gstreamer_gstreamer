@@ -95,7 +95,7 @@
 #endif
 
 G_BEGIN_DECLS
-
+#if 0 /* Original Code is commented */
 #define GST_OMX_INIT_STRUCT(st) G_STMT_START { \
   memset ((st), 0, sizeof (*(st))); \
   (st)->nSize = sizeof (*(st)); \
@@ -104,6 +104,18 @@ G_BEGIN_DECLS
   (st)->nVersion.s.nRevision = OMX_VERSION_REVISION; \
   (st)->nVersion.s.nStep = OMX_VERSION_STEP; \
 } G_STMT_END
+
+#else
+/* Support for MSM 8996:
+ * Version updated to 0x00000101 as required by MSM-OMX;
+ * Otherwise, it will be 0x00020101, which isn't coherent with MSM-OMX
+ */
+#define GST_OMX_INIT_STRUCT(st) G_STMT_START { \
+  memset ((st), 0, sizeof (*(st))); \
+  (st)->nSize = sizeof (*(st)); \
+  (st)->nVersion.nVersion = ((OMX_U32)0x00000101);\
+} G_STMT_END
+#endif
 
 #ifdef OMX_SKIP64BIT
 #define GST_OMX_GET_TICKS(ticks) ((((guint64) (ticks).nHighPart) << 32) | ((ticks).nLowPart))
