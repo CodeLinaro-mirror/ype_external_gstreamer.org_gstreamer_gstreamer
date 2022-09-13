@@ -177,6 +177,14 @@ else
   omx_inc = include_directories (join_paths ('omx', 'openmax'))
 endif
 
+omx_kernel_path = get_option('kernel_path')
+if omx_kernel_path != ''
+  gst_omx_args += ['-I' + omx_kernel_path]
+endif
+omx_staging_inc_path = get_option('staging_inc_path')
+if omx_staging_inc_path != ''
+  gst_omx_args += ['-I' + omx_staging_inc_path]
+endif
 default_omx_struct_packing = 0
 omx_target = get_option ('target')
 if omx_target == 'generic'
@@ -204,6 +212,8 @@ elif omx_target == 'rpi'
   endif
 elif omx_target == 'bellagio'
   cdata.set('USE_OMX_TARGET_BELLAGIO', 1)
+elif omx_target == 'qti'
+  cdata.set('USE_OMX_TARGET_QTI', 1)
 elif omx_target == 'zynqultrascaleplus'
   cdata.set('USE_OMX_TARGET_ZYNQ_USCALE_PLUS', 1)
   have_allegro_header = cc.has_header (
@@ -229,8 +239,17 @@ endif
 
 message ('OMX target: ' + omx_target)
 
+omx_enable_target_6155 = get_option('enable-target-6155')
+
 extra_video_headers = ''
 # Check for optional OpenMAX extension headers
+
+if cc.has_header (
+    'gbm.h',
+    args : gst_omx_args,
+    include_directories : [omx_inc])
+  cdata.set ('USE_GBM', 1)
+endif
 
 if cc.has_header (
     'OMX_VideoExt.h',
@@ -293,6 +312,16 @@ have_omx_vp8 = cc.has_header_symbol(
     include_directories : [omx_inc])
 if have_omx_vp8
   cdata.set('HAVE_VP8', 1)
+endif
+
+have_omx_vp9 = cc.has_header_symbol(
+    'OMX_Video.h',
+    'OMX_VIDEO_CodingVP9',
+    prefix : extra_video_headers,
+    args : gst_omx_args,
+    include_directories : [omx_inc])
+if have_omx_vp9
+  cdata.set('HAVE_VP9', 1)
 endif
 
 have_omx_theora = cc.has_header_symbol(
