@@ -95,6 +95,7 @@
 #endif
 
 G_BEGIN_DECLS
+#define _OMX_ZERO_MEMCOPY_RENDERING_
 #if 0 /* Original Code is commented */
 #define GST_OMX_INIT_STRUCT(st) G_STMT_START { \
   memset ((st), 0, sizeof (*(st))); \
@@ -240,6 +241,7 @@ typedef enum {
   GST_OMX_ACQUIRE_BUFFER_ERROR,
   /* No buffer is currently available (used when calling gst_omx_port_acquire_buffer() in not waiting mode) */
   GST_OMX_ACQUIRE_BUFFER_NO_AVAILABLE,
+  GST_OMX_ACQUIRE_BUFFER_RECT_CHANGED
 } GstOMXAcquireBufferReturn;
 
 struct _GstOMXCore {
@@ -268,6 +270,7 @@ typedef enum {
   GST_OMX_MESSAGE_PORT_SETTINGS_CHANGED,
   GST_OMX_MESSAGE_BUFFER_FLAG,
   GST_OMX_MESSAGE_BUFFER_DONE,
+  GST_OMX_MESSAGE_PORT_RECT_CHANGED
 } GstOMXMessageType;
 
 typedef enum {
@@ -344,6 +347,9 @@ struct _GstOMXPort {
    */
   gint settings_cookie;
   gint configured_settings_cookie;
+
+  guint pending_bufs_before_rect_change;
+  gboolean rect_changed;
 };
 
 struct _GstOMXComponent {
@@ -420,6 +426,8 @@ struct _GstOMXClassData {
 
   GstOmxComponentType type;
 };
+
+gboolean          gst_omx_caps_has_compression (const GstCaps * caps, const gchar * compression);
 
 GKeyFile *        gst_omx_get_configuration (void);
 

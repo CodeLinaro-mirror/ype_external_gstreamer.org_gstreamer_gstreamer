@@ -70,6 +70,19 @@ static GHashTable *core_handles;
 G_LOCK_DEFINE_STATIC (buffer_flags_str);
 static GHashTable *buffer_flags_str;
 
+gboolean
+gst_omx_caps_has_compression (const GstCaps * caps, const gchar * compression)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "compression") ?
+      gst_structure_get_string (structure, "compression") : NULL;
+
+  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+}
+
 GstOMXCore *
 gst_omx_core_acquire (const gchar * filename)
 {
@@ -383,6 +396,29 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
           port->eos = TRUE;
         }
 
+        break;
+      }
+      case GST_OMX_MESSAGE_PORT_RECT_CHANGED:{
+        OMX_U32 index = msg->content.port_settings_changed.port;
+        GstOMXPort *port = NULL;
+
+        GST_DEBUG_OBJECT (comp->parent, "%s rectangle crop changed (port %u)",
+            comp->name, index);
+
+        port = gst_omx_component_get_port (comp, index);
+        if (!port)
+          break;
+
+        if (port->port_def.eDir != OMX_DirOutput) {
+          GST_WARNING_OBJECT (comp->parent,
+              "rect crop should happened on out port");
+          break;
+        }
+        port->pending_bufs_before_rect_change =
+          g_queue_get_length (&port->pending_buffers);
+        port->rect_changed = TRUE;
+        GST_DEBUG_OBJECT (comp->parent, "%s pending rect change buffers %u",
+            comp->name, port->pending_bufs_before_rect_change);
         break;
       }
       case GST_OMX_MESSAGE_BUFFER_DONE:{
@@ -744,11 +780,23 @@ EventHandler (OMX_HANDLETYPE hComponent, OMX_PTR pAppData, OMX_EVENTTYPE eEvent,
               GST_OMX_HACK_EVENT_PORT_SETTINGS_CHANGED_PORT_0_TO_1))
         index = 1;
 
-
-      msg->type = GST_OMX_MESSAGE_PORT_SETTINGS_CHANGED;
-      msg->content.port_settings_changed.port = index;
-      GST_DEBUG_OBJECT (comp->parent, "%s settings changed (port index: %u)",
+      if (nData2 == OMX_IndexParamPortDefinition)
+      {
+        msg->type = GST_OMX_MESSAGE_PORT_SETTINGS_CHANGED;
+        msg->content.port_settings_changed.port = index;
+        GST_DEBUG_OBJECT (comp->parent, "%s settings changed (port index: %u)",
           comp->name, (guint) msg->content.port_settings_changed.port);
+      }
+      else if (nData2 == OMX_IndexConfigCommonOutputCrop){
+        msg->type = GST_OMX_MESSAGE_PORT_RECT_CHANGED;
+        msg->content.port_settings_changed.port = index;
+        GST_DEBUG_OBJECT (comp->parent, "%s rectangle changed (port index: %u)",
+          comp->name, (guint) msg->content.port_settings_changed.port);
+      } else {
+        GST_WARNING_OBJECT (comp->parent, "Never handle event:0x%x param:%d", msg->type, nData2);
+        g_slice_free (GstOMXMessage, msg);
+        break;
+      }
 
       gst_omx_component_send_message (comp, msg);
       break;
@@ -1039,7 +1087,9 @@ gst_omx_component_free (GstOMXComponent * comp)
       g_assert (port->buffers == NULL);
       g_assert (g_queue_get_length (&port->pending_buffers) == 0);
 
+      g_mutex_lock (&comp->lock);
       g_slice_free (GstOMXPort, port);
+      g_mutex_unlock (&comp->lock);
     }
     g_ptr_array_unref (comp->ports);
     comp->ports = NULL;
@@ -2210,6 +2260,8 @@ retry:
           comp->name, port->index);
       _buf = g_queue_pop_head (&port->pending_buffers);
 
+      if (port->pending_bufs_before_rect_change > 0)
+        port->pending_bufs_before_rect_change--;
       ret = GST_OMX_ACQUIRE_BUFFER_OK;
       goto done;
     }
@@ -2220,6 +2272,22 @@ retry:
     goto done;
   }
 
+  if (port->port_def.eDir == OMX_DirOutput &&
+      port->rect_changed == TRUE) {
+    if (port->pending_bufs_before_rect_change > 0) {
+      GST_DEBUG_OBJECT (comp->parent, "%s output port %u has rect change"
+          "pending buffer", comp->name, port->index);
+      _buf = g_queue_pop_head (&port->pending_buffers);
+
+      port->pending_bufs_before_rect_change--;
+      ret = GST_OMX_ACQUIRE_BUFFER_OK;
+      goto done;
+    }
+    port->rect_changed = FALSE;
+    ret = GST_OMX_ACQUIRE_BUFFER_RECT_CHANGED;
+    goto done;
+  }
+
   if (port->port_def.eDir == OMX_DirOutput && port->eos) {
     if (!g_queue_is_empty (&port->pending_buffers)) {
       GST_DEBUG_OBJECT (comp->parent, "%s output port %u is EOS but has "
@@ -2227,6 +2295,8 @@ retry:
           g_queue_get_length (&port->pending_buffers));
       _buf = g_queue_pop_head (&port->pending_buffers);
 
+      if (port->pending_bufs_before_rect_change > 0)
+        port->pending_bufs_before_rect_change--;
       ret = GST_OMX_ACQUIRE_BUFFER_OK;
       goto done;
     }
@@ -2265,9 +2335,6 @@ retry:
 
       /* And now check everything again and maybe get a buffer */
       goto retry;
-    } else {
-      ret = GST_OMX_ACQUIRE_BUFFER_NO_AVAILABLE;
-      goto done;
     }
   }
 

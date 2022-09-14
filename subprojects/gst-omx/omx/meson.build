@@ -48,6 +48,7 @@ if gstgl_dep.found()
   optional_deps += gstgl_dep
   extra_c_args += ['-DGST_USE_UNSTABLE_API']
 endif
+optional_deps += omx_vendor_dep
 
 gstomx = library('gstomx',
   omx_sources,
