@@ -31,6 +31,14 @@
 
 #include "gstomx.h"
 
+#ifdef USE_GBM
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <dlfcn.h>
+#include "gbm.h"
+#include "gbm_priv.h"
+#endif
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_OMX_VIDEO_DEC \
@@ -100,6 +108,21 @@ struct _GstOMXVideoDec
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   guint32 internal_entropy_buffers;
 #endif
+#ifdef _OMX_ZERO_MEMCOPY_RENDERING_
+  GQuark omx_outbuf_quark;
+#endif
+#ifdef USE_GBM
+  void* gbm_lib;
+  struct gbm_device * (*gbm_api_create_device)(int fd);
+  void (*gbm_api_device_destroy)(struct gbm_device *gbm_dev);
+  struct gbm_bo* (*gbm_api_bo_import)(struct gbm_device *gbm_dev, uint32_t type, void* buffer, uint32_t usage);
+  void (*gbm_api_bo_destroy)(struct gbm_bo *bo);
+  guint64 (*gbm_api_bo_get_modifier)(struct gbm_bo *bo);
+  int gbm_dev_fd;
+  struct gbm_device* gbm_dev;
+#endif
+
+  gboolean isubwc;
 };
 
 struct _GstOMXVideoDecClass

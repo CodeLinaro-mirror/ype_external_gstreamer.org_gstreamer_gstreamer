@@ -166,6 +166,7 @@ libm = cc.find_library('m', required : false)
 glib_dep = dependency('glib-2.0', version : glib_req, fallback: ['glib', 'libglib_dep'])
 gio_dep = dependency('gio-2.0', version : glib_req, fallback: ['glib', 'libgio_dep'] )
 gmodule_dep = dependency('gmodule-2.0', version : glib_req, fallback: ['glib', 'libgmodule_dep'])
+omx_vendor_dep = dependency('', required : false)
 
 gst_omx_args = ['-DHAVE_CONFIG_H']
 configinc = include_directories('.')
@@ -214,6 +215,7 @@ elif omx_target == 'bellagio'
   cdata.set('USE_OMX_TARGET_BELLAGIO', 1)
 elif omx_target == 'qti'
   cdata.set('USE_OMX_TARGET_QTI', 1)
+  omx_vendor_dep = cc.find_library('dl')
 elif omx_target == 'zynqultrascaleplus'
   cdata.set('USE_OMX_TARGET_ZYNQ_USCALE_PLUS', 1)
   have_allegro_header = cc.has_header (

@@ -25,7 +25,8 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-
+#include <gst/allocators/gstdmabuf.h>
+#include "OMX_QCOMExtns.h"
 #include "gstomxvideo.h"
 
 #include <math.h>
@@ -49,6 +50,9 @@ gst_omx_video_get_format_from_omx (OMX_COLOR_FORMATTYPE omx_colorformat)
       break;
     case OMX_COLOR_FormatYUV420SemiPlanar:
     case OMX_COLOR_FormatYUV420PackedSemiPlanar:
+    case OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m:
+    /* MSM8996: Added "OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m" color
+     * format support */
       format = GST_VIDEO_FORMAT_NV12;
       break;
     case OMX_COLOR_FormatYUV422SemiPlanar:
@@ -94,6 +98,15 @@ gst_omx_video_get_format_from_omx (OMX_COLOR_FORMATTYPE omx_colorformat)
       break;
 #pragma GCC diagnostic pop
 #endif
+    case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed:
+      format = GST_VIDEO_FORMAT_NV12;
+      break;
+    case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m10bitCompressed:
+      format = GST_VIDEO_FORMAT_NV12_10LE32;
+      break;
+    case QOMX_COLOR_FORMATYUV420SemiPlanarP010Venus:
+      format = GST_VIDEO_FORMAT_P010_10LE;
+      break;
     default:
       format = GST_VIDEO_FORMAT_UNKNOWN;
       break;
@@ -142,9 +155,9 @@ gst_omx_video_get_supported_colorformats (GstOMXPort * port,
         m->type = param.eColorFormat;
         negotiation_map = g_list_append (negotiation_map, m);
         GST_DEBUG_OBJECT (comp->parent,
-            "Component port %d supports %s (%d) at index %u", port->index,
+            "Component port %d supports %s (%d) at index %u format = %d", port->index,
             gst_video_format_to_string (f), param.eColorFormat,
-            (guint) param.nIndex);
+            (guint) param.nIndex, f);
       } else {
         GST_DEBUG_OBJECT (comp->parent,
             "Component port %d supports unsupported color format %d at index %u",
@@ -162,14 +175,25 @@ gst_omx_video_get_caps_for_map (GList * map)
 {
   GstCaps *caps = gst_caps_new_empty ();
   GList *l;
+  guint size;
 
   for (l = map; l; l = l->next) {
     GstOMXVideoNegotiationMap *entry = l->data;
-
-    gst_caps_append_structure (caps,
+    if ((entry->type == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed || entry->type == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m10bitCompressed )) {
+      gst_caps_append_structure (caps,
+        gst_structure_new ("video/x-raw",
+            "format", G_TYPE_STRING,
+            gst_video_format_to_string (entry->format),
+            "compression", G_TYPE_STRING,"ubwc", NULL));
+      size = gst_caps_get_size (caps);
+      gst_caps_set_features (caps, size - 1,
+      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF));
+    } else {
+      gst_caps_append_structure (caps,
         gst_structure_new ("video/x-raw",
             "format", G_TYPE_STRING,
             gst_video_format_to_string (entry->format), NULL));
+    }
   }
   return caps;
 }

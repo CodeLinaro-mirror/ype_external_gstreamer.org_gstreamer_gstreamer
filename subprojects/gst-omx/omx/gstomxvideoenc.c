@@ -21,16 +21,19 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include <stdio.h>
 
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/allocators/gstdmabuf.h>
+#include <vidc/media/msm_media_info.h>
 
 #include <string.h>
 
 #include "gstomxbufferpool.h"
 #include "gstomxvideo.h"
 #include "gstomxvideoenc.h"
+#include "OMX_QCOMExtns.h"
 
 #ifdef USE_OMX_TARGET_RPI
 #include <OMX_Broadcom.h>
@@ -545,7 +548,9 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
 
   klass->cdata.type = GST_OMX_COMPONENT_TYPE_FILTER;
   klass->cdata.default_sink_template_caps =
-      GST_VIDEO_CAPS_MAKE (GST_OMX_VIDEO_ENC_SUPPORTED_FORMATS);
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
+            GST_OMX_VIDEO_SUPPORTED_FORMATS) ";"
+      GST_VIDEO_CAPS_MAKE (GST_OMX_VIDEO_SUPPORTED_FORMATS);
 
   klass->handle_output_frame =
       GST_DEBUG_FUNCPTR (gst_omx_video_enc_handle_output_frame);
@@ -998,10 +1003,10 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
   /* Set properties */
   {
     OMX_ERRORTYPE err;
-
-    if (!gst_omx_video_enc_set_bitrate (self))
-      return FALSE;
-
+    if (self->control_rate != 0xffffffff || self->target_bitrate != 0xffffffff) {
+      if (!gst_omx_video_enc_set_bitrate (self))
+        return FALSE;
+    }
     if (self->quant_i_frames != 0xffffffff ||
         self->quant_p_frames != 0xffffffff ||
         self->quant_b_frames != 0xffffffff) {
@@ -2070,6 +2075,18 @@ gst_omx_video_enc_configure_input_buffer (GstOMXVideoEnc * self,
           ((port_def.format.video.nFrameHeight + 1) / 2));
       break;
 
+    case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m:
+      break;
+    case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed:
+      port_def.nBufferSize = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_UBWC,
+          port_def.format.video.nFrameWidth,
+          port_def.format.video.nFrameHeight);
+      break;
+    case QOMX_COLOR_Format32bitRGBA8888Compressed:
+      port_def.nBufferSize = VENUS_BUFFER_SIZE(COLOR_FMT_RGBA8888_UBWC,
+          port_def.format.video.nFrameWidth,
+          port_def.format.video.nFrameHeight);
+      break;
     default:
       GST_ERROR_OBJECT (self, "Unsupported port format %x",
           port_def.format.video.eColorFormat);
@@ -2483,6 +2500,7 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   GstVideoInfo *info = &state->info;
   GList *negotiation_map = NULL, *l;
   GstCaps *caps;
+  gboolean isubwc = FALSE ;
 
   self = GST_OMX_VIDEO_ENC (encoder);
   klass = GST_OMX_VIDEO_ENC_GET_CLASS (encoder);
@@ -2512,7 +2530,7 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
       gst_omx_port_get_port_definition (self->enc_in_port, &port_def);
     }
   }
-
+  self->isubwc = isubwc = gst_omx_caps_has_compression (state->caps, "ubwc");
   negotiation_map =
       gst_omx_video_get_supported_colorformats (self->enc_in_port,
       self->input_state);
@@ -2523,7 +2541,9 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
         port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV420Planar;
         break;
       case GST_VIDEO_FORMAT_NV12:
-        port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV420SemiPlanar;
+        port_def.format.video.eColorFormat = (isubwc) ?
+            QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed :
+            OMX_COLOR_FormatYUV420SemiPlanar;
         break;
       case GST_VIDEO_FORMAT_NV16:
         port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV422SemiPlanar;
@@ -2543,6 +2563,19 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   } else {
     for (l = negotiation_map; l; l = l->next) {
       GstOMXVideoNegotiationMap *m = l->data;
+    /* Formats defined in extensions have their own enum so disable to -Wenum-compare warning */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wenum-compare"
+      if (isubwc && (m->type != QOMX_COLOR_Format32bitRGBA8888Compressed ) &&
+        (m->type != QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed )) {
+        // Not a supported video h/w flavoured UBWC format, skip.
+        continue;
+      } else if (!isubwc && (m->type != OMX_COLOR_Format32bitARGB8888 ) &&
+        (m->type != QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m )) {
+        // Not a supported video h/w flavoured format, skip.
+        continue;
+      }
+#pragma GCC diagnostic pop
 
       if (m->format == info->finfo->format) {
         port_def.format.video.eColorFormat = m->type;
@@ -2573,6 +2606,18 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   if (gst_omx_port_update_port_definition (self->enc_in_port,
           &port_def) != OMX_ErrorNone)
     return FALSE;
+  /* update video width and height for omx core*/
+  {
+    OMX_PARAM_PORTDEFINITIONTYPE out_port_def;
+    gst_omx_port_get_port_definition (self->enc_out_port, &out_port_def);
+
+    out_port_def.format.video.nBitrate  = self->target_bitrate;
+    out_port_def.format.video.nFrameWidth = port_def.format.video.nFrameWidth;
+    out_port_def.format.video.nFrameHeight = port_def.format.video.nFrameHeight;
+    out_port_def.format.video.xFramerate = (port_def.format.video.xFramerate)*65536;//convert to Q16, seems port_def.format.video.xFramerate only consider integer fps
+    if (gst_omx_port_update_port_definition (self->enc_out_port, &out_port_def) != OMX_ErrorNone)
+      return FALSE;
+  }
 
 #ifdef USE_OMX_TARGET_RPI
   /* aspect ratio */
@@ -2629,7 +2674,9 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
 
   /* Some OMX implementations reset the bitrate after setting the compression
    * format, see bgo#698049, so re-set it */
-  gst_omx_video_enc_set_bitrate (self);
+  if (self->control_rate != 0xffffffff || self->target_bitrate != 0xffffffff) {
+    gst_omx_video_enc_set_bitrate (self);
+  }
 
   if (self->input_state)
     gst_video_codec_state_unref (self->input_state);
@@ -2914,6 +2961,59 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
       break;
     }
     case GST_VIDEO_FORMAT_NV12:
+    if (!self->isubwc) {
+      gint i, height, width;
+      guint8 *src, *dest;
+      gint src_stride;
+      gint lstride,lscanl, cstride;
+      outbuf->omx_buf->nFilledLen = 0;
+      if (!gst_video_frame_map (&frame, info, inbuf, GST_MAP_READ)) {
+        GST_ERROR_OBJECT (self, "Invalid input buffer size");
+        ret = FALSE;
+        break;
+      }
+      /* MSM8996: apply with the required MSM NV12 format */
+      src = GST_VIDEO_FRAME_COMP_DATA (&frame, 0);
+      width =  GST_VIDEO_FRAME_COMP_WIDTH (&frame, 0);
+      height =  GST_VIDEO_FRAME_COMP_HEIGHT (&frame, 0);
+      src_stride = GST_VIDEO_FRAME_COMP_STRIDE (&frame, 0);
+      lstride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+      lscanl = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+      cstride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
+      dest = outbuf->omx_buf->pBuffer + outbuf->omx_buf->nOffset;
+      for (i = 0; i < height; i++) {
+         memcpy (dest, src, width);
+         src += src_stride;
+         dest += lstride;
+      }
+      GST_DEBUG_OBJECT (self,
+          "Copy NV12 with width,height,src_stride,lstride,lscanl,cstride =  %d %d %d %d %d %d",
+           width,height,src_stride,lstride,lscanl,cstride);
+      src = GST_VIDEO_FRAME_COMP_DATA (&frame, 1);
+      height = GST_VIDEO_FRAME_COMP_HEIGHT (&frame, 1);
+      src_stride = GST_VIDEO_FRAME_COMP_STRIDE (&frame, 1);
+      dest = outbuf->omx_buf->pBuffer + outbuf->omx_buf->nOffset
+         + lstride * lscanl ;
+      for (i = 0; i < height; i++) {
+          memcpy (dest, src, width);
+          src += src_stride;
+          dest += cstride;
+      }
+
+      outbuf->omx_buf->nFilledLen =
+         VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, GST_VIDEO_FRAME_COMP_HEIGHT (&frame, 0));
+      gst_video_frame_unmap (&frame);
+      ret = TRUE;
+      break;
+    } else {
+      outbuf->omx_buf->nFilledLen = gst_buffer_get_size (inbuf);
+
+      gst_buffer_extract (inbuf, 0,
+          outbuf->omx_buf->pBuffer + outbuf->omx_buf->nOffset,
+          outbuf->omx_buf->nFilledLen);
+      ret = TRUE;
+      break;
+    }
     case GST_VIDEO_FORMAT_NV16:
     case GST_VIDEO_FORMAT_NV12_10LE32:
     case GST_VIDEO_FORMAT_NV16_10LE32:
@@ -3521,7 +3621,7 @@ gst_omx_video_enc_propose_allocation (GstVideoEncoder * encoder,
       "request at least %d buffers of size %d", num_buffers,
       (guint) self->enc_in_port->port_def.nBufferSize);
   gst_query_add_allocation_pool (query, pool,
-      self->enc_in_port->port_def.nBufferSize, num_buffers, 0);
+      GST_VIDEO_INFO_SIZE (&info), num_buffers, 0);
 
   self->in_pool_used = FALSE;
 
