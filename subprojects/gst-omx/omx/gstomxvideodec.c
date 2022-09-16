@@ -99,9 +99,13 @@ enum
 {
   PROP_0,
   PROP_INTERNAL_ENTROPY_BUFFERS,
+  PROP_OUTPUT_PICTURE_ORDER,
+  PROP_LOW_LATENCY,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
+#define GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
+#define GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT          (FALSE)
 
 /* class initialization */
 
@@ -359,9 +363,7 @@ static void
 gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (object);
-#endif
 
   switch (prop_id) {
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
@@ -369,6 +371,12 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
       self->internal_entropy_buffers = g_value_get_uint (value);
       break;
 #endif
+    case PROP_OUTPUT_PICTURE_ORDER:
+      self->output_picture_order_mode = g_value_get_uint (value);
+      break;
+    case PROP_LOW_LATENCY:
+      self->low_latency_mode = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -379,9 +387,7 @@ static void
 gst_omx_video_dec_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
-#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (object);
-#endif
 
   switch (prop_id) {
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
@@ -389,6 +395,12 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       g_value_set_uint (value, self->internal_entropy_buffers);
       break;
 #endif
+    case PROP_OUTPUT_PICTURE_ORDER:
+      g_value_set_uint (value, self->output_picture_order_mode);
+      break;
+    case PROP_LOW_LATENCY:
+      g_value_set_boolean (value, self->low_latency_mode);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -416,6 +428,20 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 #endif
+
+  g_object_class_install_property (gobject_class, PROP_OUTPUT_PICTURE_ORDER,
+      g_param_spec_uint ("output-picture-order-mode", "output picture order mode",
+          "output picture order (0xffffffff=component default, 1 : display order 2 :decoder order)",
+          0, G_MAXUINT, GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_LOW_LATENCY,
+      g_param_spec_boolean ("low-latency-mode", "Low latency mode",
+          "If enabled, decoder should be in low latency mode",
+          GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_dec_change_state);
@@ -474,6 +500,8 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
 
   g_mutex_init (&self->drain_lock);
   g_cond_init (&self->drain_cond);
+  self->output_picture_order_mode = GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
+  self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
 
 #ifdef USE_GBM
      self->gbm_dev_fd = -1;
@@ -677,6 +705,38 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
   if (!set_zynqultrascaleplus_props (self))
     return FALSE;
 #endif
+  if (self->output_picture_order_mode != GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT) {
+    // set picture order
+    QOMX_VIDEO_DECODER_PICTURE_ORDER picture_order;
+    OMX_ERRORTYPE err;
+    GST_OMX_INIT_STRUCT(&picture_order);
+
+    picture_order.eOutputPictureOrder = self->output_picture_order_mode;
+    picture_order.nPortIndex = OMX_DirOutput;
+    err = gst_omx_component_set_parameter(self->dec,
+            (OMX_INDEXTYPE)OMX_QcomIndexParamVideoDecoderPictureOrder,
+            (OMX_PTR)&picture_order);
+    GST_INFO_OBJECT (self, "set decoder picture order mode(%u), ret 0x%08x", self->output_picture_order_mode, err);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self, "Failed to set decoder picture order mode: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+    }
+  }
+
+  if (self->low_latency_mode) {
+    QOMX_EXTNINDEX_VIDEO_LOW_LATENCY_MODE LowLatency;
+    OMX_ERRORTYPE err;
+    GST_OMX_INIT_STRUCT(&LowLatency);
+    LowLatency.bEnableLowLatencyMode = (OMX_BOOL)self->low_latency_mode;
+    err = gst_omx_component_set_parameter(self->dec,
+        (OMX_INDEXTYPE)OMX_QTIIndexParamLowLatencyMode,
+        (OMX_PTR)&LowLatency);
+    GST_INFO_OBJECT (self, "Enable decoder low latency mode, ret 0x%08x", err);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self, "Failed to set low latency mode: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+    }
+  }
 
   return TRUE;
 }

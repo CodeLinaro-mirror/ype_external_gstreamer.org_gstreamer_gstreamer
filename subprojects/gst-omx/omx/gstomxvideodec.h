@@ -111,6 +111,8 @@ struct _GstOMXVideoDec
 #ifdef _OMX_ZERO_MEMCOPY_RENDERING_
   GQuark omx_outbuf_quark;
 #endif
+  guint output_picture_order_mode;
+  gboolean low_latency_mode;
 #ifdef USE_GBM
   void* gbm_lib;
   struct gbm_device * (*gbm_api_create_device)(int fd);
