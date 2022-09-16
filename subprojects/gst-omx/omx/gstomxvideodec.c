@@ -2120,15 +2120,15 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
     OMX_PARAM_PORTDEFINITIONTYPE port_def;
     GstVideoFormat format;
 
-    GST_DEBUG_OBJECT (self, "Port settings have changed, updating caps");
+    GST_DEBUG_OBJECT (self, "Port settings have changed, updating caps. acq_ret:%d", (gint)acq_return);
 
     /* Reallocate all buffers */
     if (acq_return == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE
         && gst_omx_port_is_enabled (port)) {
-        gst_omx_port_set_flushing (port, 1 * GST_SECOND, TRUE);
-       gst_omx_component_get_last_error (port->comp);
-       _omx_outstanding_bufs_retrieve (self);
-       gst_omx_port_set_flushing (port, 1 * GST_SECOND, FALSE);
+      gst_omx_port_set_flushing (port, 1 * GST_SECOND, TRUE);
+      gst_omx_component_get_last_error (port->comp);
+      _omx_outstanding_bufs_retrieve (self);
+      gst_omx_port_set_flushing (port, 1 * GST_SECOND, FALSE);
 
       err = gst_omx_port_set_enabled (port, FALSE);
       if (err != OMX_ErrorNone)
