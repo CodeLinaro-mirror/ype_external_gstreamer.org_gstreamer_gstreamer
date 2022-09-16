@@ -2260,6 +2260,18 @@ retry:
       GST_DEBUG_OBJECT (comp->parent,
           "%s output port %u needs reconfiguration but has buffers pending",
           comp->name, port->index);
+      /* When the reconfiguration happened, need to return GST_OMX_ACQUIRE_BUFFER_RECONFIGURE
+       * as soon as possible, especially when the filled length of pending buffer is
+       * zero. Because the OMX il will return the output buffer in the state of reconfiguration.
+       * It makes the output buffer been pushed back and forth between the gstomx and OMX il,
+       * which makes the reconfiguration too later.
+       */
+      _buf = g_queue_peek_head (&port->pending_buffers);
+      if (_buf && _buf->omx_buf && _buf->omx_buf->nFilledLen == 0) {
+        GST_LOG_OBJECT (comp->parent, "let pending buffer stay in queue of pending buffer");
+        ret = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE;
+        goto done;
+      }
       _buf = g_queue_pop_head (&port->pending_buffers);
 
       if (port->pending_bufs_before_rect_change > 0)

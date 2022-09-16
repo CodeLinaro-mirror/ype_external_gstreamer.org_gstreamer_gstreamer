@@ -2085,7 +2085,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
     OMX_PARAM_PORTDEFINITIONTYPE port_def;
     GstVideoFormat format;
 
-    GST_DEBUG_OBJECT (self, "Port settings have changed, updating caps");
+    GST_DEBUG_OBJECT (self, "Port settings have changed, updating caps. acq_ret:%d", (gint)acq_return);
 
     /* Reallocate all buffers */
     if (acq_return == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE
