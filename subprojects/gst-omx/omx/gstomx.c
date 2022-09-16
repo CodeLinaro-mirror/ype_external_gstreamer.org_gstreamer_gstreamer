@@ -36,6 +36,7 @@
 #include "gstomxh263dec.h"
 #include "gstomxh265dec.h"
 #include "gstomxvp8dec.h"
+#include "gstomxvp8enc.h"
 #include "gstomxtheoradec.h"
 #include "gstomxwmvdec.h"
 #include "gstomxmpeg4videoenc.h"
@@ -3594,6 +3595,7 @@ static const GGetTypeFunction types[] = {
   gst_omx_amr_dec_get_type
 #ifdef HAVE_VP8
       , gst_omx_vp8_dec_get_type
+      , gst_omx_vp8_enc_get_type
 #endif
 #ifdef HAVE_THEORA
       , gst_omx_theora_dec_get_type

@@ -31,6 +31,7 @@ extra_c_args = []
 
 if have_omx_vp8
   omx_sources += 'gstomxvp8dec.c'
+  omx_sources += 'gstomxvp8enc.c'
 endif
 
 if have_omx_vp9
