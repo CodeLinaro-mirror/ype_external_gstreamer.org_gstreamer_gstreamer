@@ -33,6 +33,10 @@ if have_omx_vp8
   omx_sources += 'gstomxvp8dec.c'
 endif
 
+if have_omx_vp9
+  omx_sources += 'gstomxvp9dec.c'
+endif
+
 if have_omx_theora
   omx_sources += 'gstomxtheoradec.c'
 endif
