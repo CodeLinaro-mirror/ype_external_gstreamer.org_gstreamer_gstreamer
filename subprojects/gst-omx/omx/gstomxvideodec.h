@@ -115,6 +115,8 @@ struct _GstOMXVideoDec
   gint width;
   gint height;
   gboolean video_info_changed;
+  guint output_picture_order_mode;
+  gboolean low_latency_mode;
 #ifdef USE_GBM
   void* gbm_lib;
   struct gbm_device * (*gbm_api_create_device)(int fd);
