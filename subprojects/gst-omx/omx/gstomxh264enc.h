@@ -42,6 +42,13 @@ G_BEGIN_DECLS
 typedef struct _GstOMXH264Enc GstOMXH264Enc;
 typedef struct _GstOMXH264EncClass GstOMXH264EncClass;
 
+typedef enum _GstOMXH264EncSliceMode
+{
+  GST_OMX_H264_ENC_SLICE_MODE_DISABLE = 0,
+  GST_OMX_H264_ENC_SLICE_MODE_MB = 2,
+  GST_OMX_H264_ENC_SLICE_MODE_BITS = 3
+}GstOMXH264EncSliceMode;
+
 struct _GstOMXH264Enc
 {
   GstOMXVideoEnc parent;
@@ -54,6 +61,9 @@ struct _GstOMXH264Enc
   gboolean constrained_intra_prediction;
   guint32 loop_filter_mode;
   guint8 ref_frames;
+  GstOMXH264EncSliceMode multislice_mode;
+  guint32 multislice_value;
+  gboolean multisliceinfo_extradata_enable;
 
   GList *headers;
 };
