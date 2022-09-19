@@ -2509,6 +2509,37 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   GST_DEBUG_OBJECT (self, "Setting new input format: %" GST_PTR_FORMAT, caps);
   gst_caps_unref (caps);
 
+  // If framerate changed during Executing state set new framerate through
+  // OMX_SetConfig
+  if (gst_omx_component_get_state (self->enc,
+      GST_CLOCK_TIME_NONE) == OMX_StateExecuting && self->input_state) {
+    GstVideoCodecState *prevState = self->input_state;
+    GstVideoInfo *prevInfo = &prevState->info;
+
+    if (prevInfo->fps_n != info->fps_n ||
+            prevInfo->fps_d != info->fps_d) {
+      GST_DEBUG_OBJECT (self, "Frame rate changed from %u to %u",
+              prevInfo->fps_n, info->fps_n);
+      OMX_CONFIG_FRAMERATETYPE enc_framerate;
+      OMX_ERRORTYPE err;
+
+      gst_omx_video_enc_flush (encoder);
+
+      GST_OMX_INIT_STRUCT (&enc_framerate);
+      enc_framerate.nPortIndex = self->enc_out_port->index;
+      //TODO: previous code seems only consider integer fps, however, omx should support non-integer fps
+      g_warn_if_fail(info->fps_d == 1 && "Only consider integer fps!");
+      enc_framerate.xEncodeFramerate = (info->fps_n)*65536;//convert to Q16 format
+      err =
+         gst_omx_component_set_config (self->enc,
+         OMX_IndexConfigVideoFramerate, &enc_framerate);
+      GST_DEBUG_OBJECT (self, " Setting Video fps with err: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+
+      return TRUE;
+    }
+  }
+
   gst_omx_port_get_port_definition (self->enc_in_port, &port_def);
 
   needs_disable =
