@@ -27,6 +27,15 @@
 
 #include "gstomx.h"
 
+//In omx il, PrependSPSPPSToIDRFramesParams is defined in HardwareAPI.h.
+//However, gstomx has no HardwareAPI.h, then, define it here.
+#include "OMX_Types.h"
+typedef struct PrependSPSPPSToIDRFramesParams {
+  OMX_U32 nSize;
+  OMX_VERSIONTYPE nVersion;
+  OMX_BOOL bEnable;
+} PrependSPSPPSToIDRFramesParams;
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_OMX_VIDEO_ENC \

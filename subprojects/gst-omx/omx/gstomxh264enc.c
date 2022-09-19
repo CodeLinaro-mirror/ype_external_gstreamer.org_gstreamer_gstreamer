@@ -26,6 +26,7 @@
 
 #include "gstomxh264enc.h"
 #include "gstomxh264utils.h"
+#include "OMX_QCOMExtns.h"
 
 #ifdef USE_OMX_TARGET_RPI
 #include <OMX_Broadcom.h>
@@ -52,9 +53,7 @@ static void gst_omx_h264_enc_get_property (GObject * object, guint prop_id,
 enum
 {
   PROP_0,
-#ifdef USE_OMX_TARGET_RPI
   PROP_INLINESPSPPSHEADERS,
-#endif
   PROP_PERIODICITYOFIDRFRAMES,
   PROP_PERIODICITYOFIDRFRAMES_COMPAT,
   PROP_INTERVALOFCODINGINTRAFRAMES,
@@ -65,11 +64,10 @@ enum
   PROP_REF_FRAMES
 };
 
-#ifdef USE_OMX_TARGET_RPI
 #define GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT      TRUE
-#endif
-#define GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT    (0xffffffff)
-#define GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT    4
+#define GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT 25
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
 #define GST_OMX_H264_VIDEO_ENC_B_FRAMES_DEFAULT (0)
 #define ALIGNMENT "{ au, nal }"
@@ -149,7 +147,6 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
   gobject_class->set_property = gst_omx_h264_enc_set_property;
   gobject_class->get_property = gst_omx_h264_enc_get_property;
 
-#ifdef USE_OMX_TARGET_RPI
   g_object_class_install_property (gobject_class, PROP_INLINESPSPPSHEADERS,
       g_param_spec_boolean ("inline-header",
           "Inline SPS/PPS headers before IDR",
@@ -157,7 +154,6 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
           GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
-#endif
 
   g_object_class_install_property (gobject_class, PROP_PERIODICITYOFIDRFRAMES,
       g_param_spec_uint ("periodicity-idr", "IDR periodicity",
@@ -170,7 +166,7 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
   g_object_class_install_property (gobject_class,
       PROP_PERIODICITYOFIDRFRAMES_COMPAT, g_param_spec_uint ("periodicty-idr",
           "IDR periodicity",
-          "Periodicity of IDR frames (0xffffffff=component default) DEPRECATED - only for backwards compat",
+          "Periodicity of IDR frames DEPRECATED - only for backwards compat",
           0, G_MAXUINT,
           GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
@@ -180,7 +176,7 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
       PROP_INTERVALOFCODINGINTRAFRAMES,
       g_param_spec_uint ("interval-intraframes",
           "Interval of coding Intra frames",
-          "Interval of coding Intra frames (0xffffffff=component default)", 0,
+          "Interval of coding Intra frames", 0,
           G_MAXUINT,
           GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
@@ -254,11 +250,9 @@ gst_omx_h264_enc_set_property (GObject * object, guint prop_id,
   GstOMXH264Enc *self = GST_OMX_H264_ENC (object);
 
   switch (prop_id) {
-#ifdef USE_OMX_TARGET_RPI
     case PROP_INLINESPSPPSHEADERS:
       self->inline_sps_pps_headers = g_value_get_boolean (value);
       break;
-#endif
     case PROP_PERIODICITYOFIDRFRAMES:
     case PROP_PERIODICITYOFIDRFRAMES_COMPAT:
       self->periodicty_idr = g_value_get_uint (value);
@@ -294,11 +288,9 @@ gst_omx_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
   GstOMXH264Enc *self = GST_OMX_H264_ENC (object);
 
   switch (prop_id) {
-#ifdef USE_OMX_TARGET_RPI
     case PROP_INLINESPSPPSHEADERS:
       g_value_set_boolean (value, self->inline_sps_pps_headers);
       break;
-#endif
     case PROP_PERIODICITYOFIDRFRAMES:
     case PROP_PERIODICITYOFIDRFRAMES_COMPAT:
       g_value_set_uint (value, self->periodicty_idr);
@@ -330,10 +322,8 @@ gst_omx_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
 static void
 gst_omx_h264_enc_init (GstOMXH264Enc * self)
 {
-#ifdef USE_OMX_TARGET_RPI
   self->inline_sps_pps_headers =
       GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT;
-#endif
   self->periodicty_idr =
       GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT;
   self->interval_intraframes =
@@ -517,7 +507,7 @@ set_avc_intra_period (GstOMXH264Enc * self)
   config_avcintraperiod.nPortIndex =
       GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
   err =
-      gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+      gst_omx_component_get_config (GST_OMX_VIDEO_ENC (self)->enc,
       OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod);
   if (err == OMX_ErrorUnsupportedIndex) {
     GST_WARNING_OBJECT (self,
@@ -534,23 +524,17 @@ set_avc_intra_period (GstOMXH264Enc * self)
       (guint) config_avcintraperiod.nPFrames,
       (guint) config_avcintraperiod.nIDRPeriod);
 
-  if (self->periodicty_idr !=
-      GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT) {
-    config_avcintraperiod.nIDRPeriod = self->periodicty_idr;
-  }
+  config_avcintraperiod.nIDRPeriod = self->periodicty_idr;
 
-  if (self->interval_intraframes !=
-      GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT) {
     /* This OMX API doesn't allow us to specify the number of B-frames.
      * So if user requested one we have to rely on update_param_avc()
      * to configure the intraframes interval so it can take the
      * B-frames into account. */
-    if (self->b_frames == GST_OMX_H264_VIDEO_ENC_B_FRAMES_DEFAULT)
-      config_avcintraperiod.nPFrames = self->interval_intraframes;
-  }
+  if (self->b_frames == GST_OMX_H264_VIDEO_ENC_B_FRAMES_DEFAULT)
+    config_avcintraperiod.nPFrames = self->interval_intraframes;
 
   err =
-      gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+      gst_omx_component_set_config (GST_OMX_VIDEO_ENC (self)->enc,
       OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
@@ -615,53 +599,42 @@ gst_omx_h264_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
   GstOMXH264Enc *self = GST_OMX_H264_ENC (enc);
   GstCaps *peercaps;
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
-#ifdef USE_OMX_TARGET_RPI
-  OMX_CONFIG_PORTBOOLEANTYPE config_inline_header;
-#endif
+  PrependSPSPPSToIDRFramesParams config_inline_header;
   OMX_ERRORTYPE err;
   const gchar *profile_string, *level_string;
   OMX_VIDEO_AVCPROFILETYPE profile = OMX_VIDEO_AVCProfileMax;
   OMX_VIDEO_AVCLEVELTYPE level = OMX_VIDEO_AVCLevelMax;
   gboolean enable_subframe = FALSE;
 
-#ifdef USE_OMX_TARGET_RPI
   GST_OMX_INIT_STRUCT (&config_inline_header);
-  config_inline_header.nPortIndex =
-      GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
-  err =
-      gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
-      OMX_IndexParamBrcmVideoAVCInlineHeaderEnable, &config_inline_header);
+  err = gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+      OMX_QcomIndexParamSequenceHeaderWithIDR, &config_inline_header);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
-        "can't get OMX_IndexParamBrcmVideoAVCInlineHeaderEnable %s (0x%08x)",
+        "can't get OMX_QcomIndexParamSequenceHeaderWithIDR %s (0x%08x)",
         gst_omx_error_to_string (err), err);
     return FALSE;
   }
 
   if (self->inline_sps_pps_headers) {
-    config_inline_header.bEnabled = OMX_TRUE;
+    config_inline_header.bEnable = OMX_TRUE;
   } else {
-    config_inline_header.bEnabled = OMX_FALSE;
+    config_inline_header.bEnable = OMX_FALSE;
   }
 
   err =
       gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
-      OMX_IndexParamBrcmVideoAVCInlineHeaderEnable, &config_inline_header);
+      OMX_QcomIndexParamSequenceHeaderWithIDR, &config_inline_header);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
-        "can't set OMX_IndexParamBrcmVideoAVCInlineHeaderEnable %s (0x%08x)",
+        "can't set OMX_QcomIndexParamSequenceHeaderWithIDR %s (0x%08x)",
         gst_omx_error_to_string (err), err);
     return FALSE;
   }
-#endif
 
   /* Configure GOP pattern */
-  if (self->periodicty_idr !=
-      GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT
-      || self->interval_intraframes !=
-      GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT) {
-    set_avc_intra_period (self);
-  }
+  set_avc_intra_period (self);
+
 #ifdef USE_OMX_TARGET_RPI
   /* The Pi uses a specific OMX setting to configure the intra period */
 

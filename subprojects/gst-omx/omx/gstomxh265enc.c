@@ -28,6 +28,7 @@
 #include "gstomxh265enc.h"
 #include "gstomxh265utils.h"
 #include "gstomxvideo.h"
+#include <OMX_QCOMExtns.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_h265_enc_debug_category);
 #define GST_CAT_DEFAULT gst_omx_h265_enc_debug_category
@@ -52,10 +53,13 @@ enum
   PROP_B_FRAMES,
   PROP_CONSTRAINED_INTRA_PREDICTION,
   PROP_LOOP_FILTER_MODE,
+  PROP_INLINESPSPPSHEADERS,
 };
 
-#define GST_OMX_H265_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT    (0xffffffff)
-#define GST_OMX_H265_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_H265_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT      TRUE
+#define GST_OMX_H265_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT    4
+#define GST_OMX_H265_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT 25
+
 #define GST_OMX_H265_VIDEO_ENC_B_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_H265_VIDEO_ENC_CONSTRAINED_INTRA_PREDICTION_DEFAULT (FALSE)
 #define GST_OMX_H265_VIDEO_ENC_LOOP_FILTER_MODE_DEFAULT (0xffffffff)
@@ -160,7 +164,14 @@ gst_omx_h265_enc_class_init (GstOMXH265EncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
-#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+  g_object_class_install_property (gobject_class, PROP_INLINESPSPPSHEADERS,
+      g_param_spec_boolean ("inline-header",
+          "Inline SPS/PPS headers before IDR",
+          "Inline SPS/PPS header before IDR",
+          GST_OMX_H265_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   g_object_class_install_property (gobject_class, PROP_PERIODICITYOFIDRFRAMES,
       g_param_spec_uint ("periodicity-idr", "IDR periodicity",
           "Periodicity of IDR frames (0xffffffff=component default)",
@@ -169,6 +180,7 @@ gst_omx_h265_enc_class_init (GstOMXH265EncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   g_object_class_install_property (gobject_class, PROP_B_FRAMES,
       g_param_spec_uint ("b-frames", "Number of B-frames",
           "Number of B-frames between two consecutive I-frames (0xffffffff=component default)",
@@ -227,10 +239,13 @@ gst_omx_h265_enc_set_property (GObject * object, guint prop_id,
     case PROP_INTERVALOFCODINGINTRAFRAMES:
       self->interval_intraframes = g_value_get_uint (value);
       break;
-#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+    case PROP_INLINESPSPPSHEADERS:
+      self->inline_sps_pps_headers = g_value_get_boolean (value);
+      break;
     case PROP_PERIODICITYOFIDRFRAMES:
       self->periodicity_idr = g_value_get_uint (value);
       break;
+#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_B_FRAMES:
       self->b_frames = g_value_get_uint (value);
       break;
@@ -257,10 +272,13 @@ gst_omx_h265_enc_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_INTERVALOFCODINGINTRAFRAMES:
       g_value_set_uint (value, self->interval_intraframes);
       break;
-#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+    case PROP_INLINESPSPPSHEADERS:
+      g_value_set_boolean (value, self->inline_sps_pps_headers);
+      break;
     case PROP_PERIODICITYOFIDRFRAMES:
       g_value_set_uint (value, self->periodicity_idr);
       break;
+#ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_B_FRAMES:
       g_value_set_uint (value, self->b_frames);
       break;
@@ -282,6 +300,8 @@ gst_omx_h265_enc_init (GstOMXH265Enc * self)
 {
   self->interval_intraframes =
       GST_OMX_H265_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT;
+  self->inline_sps_pps_headers =
+      GST_OMX_H265_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   self->periodicity_idr =
       GST_OMX_H265_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT;
@@ -488,6 +508,8 @@ gst_omx_h265_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
   OMX_VIDEO_HEVCPROFILETYPE profile = OMX_VIDEO_HEVCProfileUnknown;
   OMX_VIDEO_HEVCLEVELTYPE level = OMX_VIDEO_HEVCLevelUnknown;
   gboolean enable_subframe = FALSE;
+  PrependSPSPPSToIDRFramesParams config_inline_header;
+  QOMX_VIDEO_INTRAPERIODTYPE config_hevcintraperiod;
 
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   if (self->periodicity_idr !=
@@ -555,6 +577,55 @@ gst_omx_h265_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
 
   gst_omx_port_set_subframe (GST_OMX_VIDEO_ENC (self)->enc_out_port,
       enable_subframe);
+  GST_OMX_INIT_STRUCT (&config_inline_header);
+
+  err = gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+    OMX_QcomIndexParamSequenceHeaderWithIDR, &config_inline_header);
+  if (err != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self,
+      "can't get OMX_QcomIndexParamSequenceHeaderWithIDR %s (0x%08x)",
+      gst_omx_error_to_string (err), err);
+    return FALSE;
+  }
+
+  if (self->inline_sps_pps_headers) {
+    config_inline_header.bEnable = OMX_TRUE;
+  } else {
+    config_inline_header.bEnable = OMX_FALSE;
+  }
+
+  err = gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+    OMX_QcomIndexParamSequenceHeaderWithIDR, &config_inline_header);
+  if (err != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self,
+      "can't set OMX_QcomIndexParamSequenceHeaderWithIDR %s (0x%08x)",
+       gst_omx_error_to_string (err), err);
+    return FALSE;
+  }
+
+  GST_OMX_INIT_STRUCT (&config_hevcintraperiod);
+  config_hevcintraperiod.nPortIndex =
+    GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
+  err = gst_omx_component_get_config (GST_OMX_VIDEO_ENC (self)->enc,
+    QOMX_IndexConfigVideoIntraperiod, &config_hevcintraperiod);
+  if (err != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self,
+      "can't get QOMX_IndexConfigVideoIntraperiod %s (0x%08x)",
+      gst_omx_error_to_string (err), err);
+    return FALSE;
+  }
+
+  config_hevcintraperiod.nIDRPeriod = self->periodicity_idr;
+  config_hevcintraperiod.nPFrames = self->interval_intraframes;
+
+  err = gst_omx_component_set_config (GST_OMX_VIDEO_ENC (self)->enc,
+    QOMX_IndexConfigVideoIntraperiod, &config_hevcintraperiod);
+  if (err != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self,
+      "can't set QOMX_IndexConfigVideoIntraperiod %s (0x%08x)",
+      gst_omx_error_to_string (err), err);
+    return FALSE;
+  }
 
   return TRUE;
 

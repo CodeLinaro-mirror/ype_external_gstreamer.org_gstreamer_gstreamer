@@ -46,9 +46,7 @@ struct _GstOMXH264Enc
 {
   GstOMXVideoEnc parent;
 
-#ifdef USE_OMX_TARGET_RPI
   gboolean inline_sps_pps_headers;
-#endif
   guint32 periodicty_idr;
   guint32 interval_intraframes;
   guint32 b_frames;
