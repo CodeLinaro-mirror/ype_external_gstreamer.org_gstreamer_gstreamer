@@ -351,6 +351,16 @@ if have_omx_hevc
   cdata.set('HAVE_HEVC', 1)
 endif
 
+have_spspps = cc.has_header_symbol(
+    'OMX_Video.h',
+    'PrependSPSPPSToIDRFramesParams',
+    prefix : extra_video_headers,
+    args : gst_omx_args,
+    include_directories : [omx_inc])
+if not have_spspps
+  cdata.set('NO_DEF_SPSPPSPAR', 1)
+endif
+
 if gstgl_dep.found()
   cdata.set ('HAVE_GST_GL', 1)
 endif
