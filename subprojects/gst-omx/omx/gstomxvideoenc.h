@@ -117,6 +117,8 @@ struct _GstOMXVideoEnc
 
   guint32 rotation;
   guint32 mirror;
+  guint32 intra_refresh_mode;
+  guint32 intra_refresh_mbs;
   guint32 default_target_bitrate;
 
   GstFlowReturn downstream_flow_ret;
