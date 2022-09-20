@@ -58,6 +58,9 @@ gst_omx_video_enc_control_rate_get_type (void)
           "variable-skip-frames"},
       {OMX_Video_ControlRateConstantSkipFrames, "Constant Skip Frames",
           "constant-skip-frames"},
+      {QOMX_Video_ControlRateMaxBitrate, "MaxBitrate", "max-bitrate"},
+      {QOMX_Video_ControlRateMaxBitrateSkipFrames, "MaxBitrate Skip Frames",
+        "max-bitrate-skip-frames"},
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
       {OMX_ALG_Video_ControlRateLowLatency, "Low Latency", "low-latency"},
 #endif
