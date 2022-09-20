@@ -73,6 +73,26 @@ gst_omx_video_enc_control_rate_get_type (void)
   return qtype;
 }
 
+#define GST_TYPE_OMX_VIDEO_ENC_MIRROR (gst_omx_video_enc_mirror_get_type ())
+static GType
+gst_omx_video_enc_mirror_get_type (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {OMX_MirrorNone, "None", "none"},
+      {OMX_MirrorVertical, "Vertical", "vertical"},
+      {OMX_MirrorHorizontal, "Horizontal", "horizontal"},
+      {OMX_MirrorBoth, "Both", "both"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstOMXVideoEncMirror", values);
+  }
+  return qtype;
+}
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
 #define GST_TYPE_OMX_VIDEO_ENC_QP_MODE (gst_omx_video_enc_qp_mode_get_type ())
 typedef enum
@@ -298,6 +318,8 @@ enum
   PROP_LONGTERM_REF,
   PROP_LONGTERM_FREQUENCY,
   PROP_LOOK_AHEAD,
+  PROP_ROTATION,
+  PROP_MIRROR,
 };
 
 /* FIXME: Better defaults */
@@ -335,6 +357,8 @@ enum
 #define GST_OMX_VIDEO_ENC_LONGTERM_REF_DEFAULT (FALSE)
 #define GST_OMX_VIDEO_ENC_LONGTERM_FREQUENCY_DEFAULT (0)
 #define GST_OMX_VIDEO_ENC_LOOK_AHEAD_DEFAULT (0)
+#define GST_OMX_VIDEO_ENC_ROTATION_DEFAULT (0)
+#define GST_OMX_VIDEO_ENC_MIRROR_DEFAULT (0)
 
 /* ZYNQ_USCALE_PLUS encoder custom events */
 #define OMX_ALG_GST_EVENT_INSERT_LONGTERM "omx-alg/insert-longterm"
@@ -609,6 +633,20 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 #endif
+  g_object_class_install_property (gobject_class, PROP_ROTATION,
+      g_param_spec_uint ("rotation", "Rotate the input frame",
+          "rotate (0=no rotation, could be 90, 180, 270)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_ROTATION_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIRROR,
+      g_param_spec_enum ("mirror", "mirror the input frame",
+          "mirror (0=no mirror)",
+          GST_TYPE_OMX_VIDEO_ENC_MIRROR,
+          GST_OMX_VIDEO_ENC_MIRROR_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_enc_change_state);
@@ -681,6 +719,8 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
 #endif
 
   self->default_target_bitrate = GST_OMX_PROP_OMX_DEFAULT;
+  self->rotation = GST_OMX_VIDEO_ENC_ROTATION_DEFAULT;
+  self->mirror = GST_OMX_VIDEO_ENC_MIRROR_DEFAULT;
 
   g_mutex_init (&self->drain_lock);
   g_cond_init (&self->drain_cond);
@@ -1226,7 +1266,27 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
         GST_ERROR_OBJECT (self, "Failed to get I/P/B QP range parameters: %s (0x%08x)", gst_omx_error_to_string (err), err);
       }
     }
+
+    if (self->mirror) {
+      OMX_CONFIG_MIRRORTYPE framemirror;
+      GST_OMX_INIT_STRUCT (&framemirror);
+      if (self->enc) {
+        OMX_ERRORTYPE err;
+        framemirror.nPortIndex = self->enc_out_port->index;
+        framemirror.eMirror = (OMX_MIRRORTYPE)self->mirror;
+        err = gst_omx_component_set_config(self->enc, OMX_IndexConfigCommonMirror, (OMX_PTR)&framemirror);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self,
+              "Failed to set mirror parameter: %s (0x%08x)",
+              gst_omx_error_to_string (err), err);
+        } else {
+          GST_INFO_OBJECT(self, "set mirror:%d", self->mirror);
+        }
+      }
+    }
+
   }
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   if (!set_zynqultrascaleplus_props (self))
     return FALSE;
@@ -1430,6 +1490,14 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
       self->look_ahead = g_value_get_uint (value);
       break;
 #endif
+    case PROP_ROTATION:
+      self->rotation = g_value_get_uint (value);
+      GST_INFO_OBJECT(self, "set rotation:%d", self->rotation);
+      break;
+    case PROP_MIRROR:
+      self->mirror = g_value_get_enum (value);
+      GST_INFO_OBJECT(self, "set mirror:%d", self->mirror);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1546,6 +1614,12 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_uint (value, self->look_ahead);
       break;
 #endif
+    case PROP_ROTATION:
+      g_value_set_uint (value, self->rotation);
+      break;
+    case PROP_MIRROR:
+      g_value_set_enum (value, self->mirror);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2946,6 +3020,24 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   gst_omx_video_enc_set_latency (self);
 #endif
+
+  if (self->rotation) {
+    OMX_CONFIG_ROTATIONTYPE framerotate;
+    GST_OMX_INIT_STRUCT (&framerotate);
+    if (self->enc) {
+      OMX_ERRORTYPE err;
+      framerotate.nPortIndex = self->enc_out_port->index;
+      framerotate.nRotation = (OMX_S32)self->rotation;
+      err = gst_omx_component_set_config(self->enc, OMX_IndexConfigCommonRotate, (OMX_PTR)&framerotate);
+      if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+            "Failed to set rotation parameter: %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+      } else {
+        GST_INFO_OBJECT(self, "set rotation:%d", self->rotation);
+      }
+    }
+  }
 
   self->downstream_flow_ret = GST_FLOW_OK;
   return TRUE;
