@@ -84,6 +84,9 @@ struct _GstOMXVideoEnc
   guint32 quant_i_frames;
   guint32 quant_p_frames;
   guint32 quant_b_frames;
+  guint32 init_quant_i_frames;
+  guint32 init_quant_p_frames;
+  guint32 init_quant_b_frames;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   guint32 qp_mode;
   guint32 min_qp;
