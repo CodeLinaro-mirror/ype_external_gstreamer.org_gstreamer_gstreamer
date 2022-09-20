@@ -273,6 +273,12 @@ enum
   PROP_INIT_QUANT_I_FRAMES,
   PROP_INIT_QUANT_P_FRAMES,
   PROP_INIT_QUANT_B_FRAMES,
+  PROP_MIN_QUANT_I_FRAMES,
+  PROP_MAX_QUANT_I_FRAMES,
+  PROP_MIN_QUANT_P_FRAMES,
+  PROP_MAX_QUANT_P_FRAMES,
+  PROP_MIN_QUANT_B_FRAMES,
+  PROP_MAX_QUANT_B_FRAMES,
   PROP_QP_MODE,
   PROP_MIN_QP,
   PROP_MAX_QP,
@@ -303,6 +309,13 @@ enum
 #define GST_OMX_VIDEO_ENC_INIT_QUANT_I_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_INIT_QUANT_P_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MIN_QUANT_I_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MIN_QUANT_P_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+
 #define GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT (10)
 #define GST_OMX_VIDEO_ENC_MAX_QP_DEFAULT (51)
@@ -404,6 +417,48 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
       g_param_spec_uint ("init-quant-b-frames", "Initial B-Frame Quantization",
           "Initial Quantization parameter for B-frames (0xffffffff=component default) if RC enabled, quant-b-frames is for RC off",
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIN_QUANT_I_FRAMES,
+      g_param_spec_uint ("min-quant-i-frames", "I-Frame Min Quantization",
+          "Min Quantization parameter for I-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MIN_QUANT_I_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_QUANT_I_FRAMES,
+      g_param_spec_uint ("max-quant-i-frames", "I-Frame Max Quantization",
+          "Max Quantization parameter for I-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIN_QUANT_P_FRAMES,
+      g_param_spec_uint ("min-quant-p-frames", "P-Frame Min Quantization",
+          "Max Quantization parameter for P-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MIN_QUANT_P_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_QUANT_P_FRAMES,
+      g_param_spec_uint ("max-quant-p-frames", "P-Frame Max Quantization",
+          "Max Quantization parameter for P-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIN_QUANT_B_FRAMES,
+      g_param_spec_uint ("min-quant-b-frames", "B-Frame Min Quantization",
+          "Min Quantization parameter for B-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_QUANT_B_FRAMES,
+      g_param_spec_uint ("max-quant-b-frames", "B-Frame Max Quantization",
+          "Max Quantization parameter for B-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -597,6 +652,12 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
   self->init_quant_i_frames = GST_OMX_VIDEO_ENC_INIT_QUANT_I_FRAMES_DEFAULT;
   self->init_quant_p_frames = GST_OMX_VIDEO_ENC_INIT_QUANT_P_FRAMES_DEFAULT;
   self->init_quant_b_frames = GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT;
+  self->min_quant_i_frames = GST_OMX_VIDEO_ENC_MIN_QUANT_I_FRAMES_DEFAULT;
+  self->min_quant_p_frames = GST_OMX_VIDEO_ENC_MIN_QUANT_P_FRAMES_DEFAULT;
+  self->min_quant_b_frames = GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT;
+  self->max_quant_i_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT;
+  self->max_quant_p_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT;
+  self->max_quant_b_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   self->qp_mode = GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT;
   self->min_qp = GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT;
@@ -1128,6 +1189,43 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
       }
     }
 
+    if (self->min_quant_i_frames != 0xffffffff || self->min_quant_p_frames != 0xffffffff || self->min_quant_b_frames != 0xffffffff ||
+      self->max_quant_i_frames != 0xffffffff || self->max_quant_p_frames != 0xffffffff || self->max_quant_b_frames != 0xffffffff) {
+      OMX_QCOM_VIDEO_PARAM_IPB_QPRANGETYPE QPRanges;
+      GST_OMX_INIT_STRUCT (&QPRanges);
+      QPRanges.nPortIndex = self->enc_out_port->index;
+      err = gst_omx_component_get_parameter (self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamVideoIPBQPRange, &QPRanges);
+      if (err == OMX_ErrorNone) {
+        GST_DEBUG_OBJECT (self, "Got QP range, I %d-%d, P %d-%d, B %d-%d, will change qp range based on it", QPRanges.minIQP, QPRanges.maxIQP, QPRanges.minPQP, QPRanges.maxPQP, QPRanges.minBQP, QPRanges.maxBQP);
+        if (self->min_quant_i_frames != 0xffffffff)
+          QPRanges.minIQP = self->min_quant_i_frames;
+        if (self->min_quant_p_frames != 0xffffffff)
+          QPRanges.minPQP = self->min_quant_p_frames;
+        if (self->min_quant_b_frames != 0xffffffff)
+          QPRanges.minBQP = self->min_quant_b_frames;
+        if (self->max_quant_i_frames != 0xffffffff)
+          QPRanges.maxIQP = self->max_quant_i_frames;
+        if (self->max_quant_p_frames != 0xffffffff)
+          QPRanges.maxPQP = self->max_quant_p_frames;
+        if (self->max_quant_b_frames != 0xffffffff)
+          QPRanges.maxBQP = self->max_quant_b_frames;
+
+        if (QPRanges.minIQP > QPRanges.maxIQP || QPRanges.minPQP > QPRanges.maxPQP || QPRanges.minBQP > QPRanges.maxBQP) {
+          //If user only set min QP, it probably bigger than default max QP, user should set a bigger max QP. The same for max QP.
+          GST_ERROR_OBJECT (self, "QP range not reasonable, I %d-%d, P %d-%d, B %d-%d", QPRanges.minIQP, QPRanges.maxIQP, QPRanges.minPQP, QPRanges.maxPQP, QPRanges.minBQP, QPRanges.maxBQP);
+          return FALSE;
+        }
+
+        err = gst_omx_component_set_parameter (self->enc,
+          (OMX_INDEXTYPE)OMX_QcomIndexParamVideoIPBQPRange, &QPRanges);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self, "Failed to set I/P/B QP range parameters: %s (0x%08x)", gst_omx_error_to_string (err), err);
+          return FALSE;
+        }
+      } else {
+        GST_ERROR_OBJECT (self, "Failed to get I/P/B QP range parameters: %s (0x%08x)", gst_omx_error_to_string (err), err);
+      }
+    }
   }
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   if (!set_zynqultrascaleplus_props (self))
@@ -1255,6 +1353,24 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
     case PROP_INIT_QUANT_B_FRAMES:
       self->init_quant_b_frames = g_value_get_uint (value);
       break;
+    case PROP_MIN_QUANT_I_FRAMES:
+      self->min_quant_i_frames = g_value_get_uint (value);
+      break;
+    case PROP_MIN_QUANT_P_FRAMES:
+      self->min_quant_p_frames = g_value_get_uint (value);
+      break;
+    case PROP_MIN_QUANT_B_FRAMES:
+      self->min_quant_b_frames = g_value_get_uint (value);
+      break;
+    case PROP_MAX_QUANT_I_FRAMES:
+      self->max_quant_i_frames = g_value_get_uint (value);
+      break;
+    case PROP_MAX_QUANT_P_FRAMES:
+      self->max_quant_p_frames = g_value_get_uint (value);
+      break;
+    case PROP_MAX_QUANT_B_FRAMES:
+      self->max_quant_b_frames = g_value_get_uint (value);
+      break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
       self->qp_mode = g_value_get_enum (value);
@@ -1352,6 +1468,24 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_INIT_QUANT_B_FRAMES:
       g_value_set_uint (value, self->init_quant_b_frames);
+      break;
+    case PROP_MIN_QUANT_I_FRAMES:
+      g_value_set_uint (value, self->min_quant_i_frames);
+      break;
+    case PROP_MIN_QUANT_P_FRAMES:
+      g_value_set_uint (value, self->min_quant_p_frames);
+      break;
+    case PROP_MIN_QUANT_B_FRAMES:
+      g_value_set_uint (value, self->min_quant_b_frames);
+      break;
+    case PROP_MAX_QUANT_I_FRAMES:
+      g_value_set_uint (value, self->max_quant_i_frames);
+      break;
+    case PROP_MAX_QUANT_P_FRAMES:
+      g_value_set_uint (value, self->max_quant_p_frames);
+      break;
+    case PROP_MAX_QUANT_B_FRAMES:
+      g_value_set_uint (value, self->max_quant_b_frames);
       break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
