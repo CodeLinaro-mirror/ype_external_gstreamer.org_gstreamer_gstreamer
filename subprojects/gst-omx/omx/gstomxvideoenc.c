@@ -340,6 +340,8 @@ enum
   PROP_MIRROR,
   PROP_INTRA_REFRESH_MODE,
   PROP_INTRA_REFRESH_MBS,
+  PROP_DOWNSCALE_WIDTH,
+  PROP_DOWNSCALE_HEIGHT,
 };
 
 /* FIXME: Better defaults */
@@ -380,6 +382,8 @@ enum
 #define GST_OMX_VIDEO_ENC_ROTATION_DEFAULT (0)
 #define GST_OMX_VIDEO_ENC_MIRROR_DEFAULT (0)
 #define GST_OMX_VIDEO_ENC_INTRA_REFRESH_MODE_DEFAULT (0x7fffffff)
+#define GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT (0xffffffff)
 
 /* ZYNQ_USCALE_PLUS encoder custom events */
 #define OMX_ALG_GST_EVENT_INSERT_LONGTERM "omx-alg/insert-longterm"
@@ -684,6 +688,20 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class, PROP_DOWNSCALE_WIDTH,
+      g_param_spec_uint ("downscale-width", "downscale width",
+          "downscale_width (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_DOWNSCALE_HEIGHT,
+      g_param_spec_uint ("downscale-height", "downscale height",
+          "downscale_height (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_enc_change_state);
 
@@ -759,6 +777,8 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
   self->mirror = GST_OMX_VIDEO_ENC_MIRROR_DEFAULT;
   self->intra_refresh_mode = GST_OMX_VIDEO_ENC_INTRA_REFRESH_MODE_DEFAULT;
   self->intra_refresh_mbs = 0;
+  self->downscale_width = GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT;
+  self->downscale_height = GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT;
 
   g_mutex_init (&self->drain_lock);
   g_cond_init (&self->drain_cond);
@@ -1349,7 +1369,30 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
           gst_omx_error_to_string (err), err);
       }
     }
-
+    if (self->downscale_width != 0xffffffff && self->downscale_height != 0xffffffff) {
+      QOMX_INDEXDOWNSCALAR downscalar_params;
+      GST_OMX_INIT_STRUCT(&downscalar_params);
+      if (self->enc) {
+        downscalar_params.nPortIndex = self->enc_out_port->index;
+        err = gst_omx_component_get_parameter(self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamVideoDownScalar,(OMX_PTR)&downscalar_params);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self,
+            "Failed to get downscaleparameter: %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+        }
+        downscalar_params.bEnable = OMX_TRUE;
+        downscalar_params.nOutputWidth = self->downscale_width;
+        downscalar_params.nOutputHeight = self->downscale_height;
+        err = gst_omx_component_set_parameter(self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamVideoDownScalar,(OMX_PTR)&downscalar_params);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self,
+            "Failed to set downscale parameter: %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+        } else {
+          GST_INFO_OBJECT(self, "set downscale width height :%d %d", self->downscale_width,self->downscale_height);
+        }
+      }
+    }
   }
 
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
@@ -1569,6 +1612,12 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
     case PROP_INTRA_REFRESH_MBS:
       self->intra_refresh_mbs = g_value_get_uint (value);
       break;
+    case PROP_DOWNSCALE_WIDTH:
+      self->downscale_width= g_value_get_uint (value);
+      break;
+    case PROP_DOWNSCALE_HEIGHT:
+      self->downscale_height = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1696,6 +1745,12 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_INTRA_REFRESH_MBS:
       g_value_set_uint (value, self->intra_refresh_mbs);
+      break;
+    case PROP_DOWNSCALE_WIDTH:
+      g_value_set_uint(value,self->downscale_width);
+      break;
+    case PROP_DOWNSCALE_HEIGHT:
+      g_value_set_uint(value,self->downscale_height);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
