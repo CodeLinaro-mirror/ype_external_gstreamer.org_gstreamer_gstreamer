@@ -27,6 +27,7 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <string.h>
+#include "media/hardware/MetadataBufferType.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -230,6 +231,30 @@ typedef struct _GstOMXBuffer GstOMXBuffer;
 typedef struct _GstOMXClassData GstOMXClassData;
 typedef struct _GstOMXMessage GstOMXMessage;
 
+/* copy the defines of _MetaBufferType, ITUR601, _NativeHandle and _MetaBuffer
+ * from mm-video-utils
+ */
+typedef enum _MetaBufferType {
+#ifdef USE_NATIVE_HANDLE_SOURCE
+    CameraSource = 3,
+#else
+    CameraSource = 0,
+#endif
+    GrallocSource = 1,
+}MetaBufferType;
+
+#define ITUR601 0x200000
+typedef struct _NativeHandle {
+    OMX_S32 version;        /* sizeof(native_handle_t) */
+    OMX_S32 numFds;         /* number of file-descriptors at &data[0] */
+    OMX_S32 numInts;        /* number of ints at &data[numFds] */
+    OMX_S32 data[0];        /* numFds + numInts ints */
+}NativeHandle;
+typedef struct _MetaBuffer {
+    MetaBufferType buffer_type;
+    NativeHandle* meta_handle;
+}MetaBuffer;
+
 typedef enum {
   /* Everything good and the buffer is valid */
   GST_OMX_ACQUIRE_BUFFER_OK = 0,
@@ -352,6 +377,7 @@ struct _GstOMXPort {
 
   guint pending_bufs_before_rect_change;
   gboolean rect_changed;
+  gboolean enc_share_frame_buffer;
 };
 
 struct _GstOMXComponent {
