@@ -2341,6 +2341,11 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
   GstOMXAcquireBufferReturn acq_return;
   OMX_ERRORTYPE err;
 
+#ifdef GST_VDEC_PUSH_EVENT_API_EXPOSED
+  GList *cur = NULL;
+  GstEvent *event = NULL;
+#endif
+
 #if defined (USE_OMX_TARGET_RPI) && defined (HAVE_GST_GL)
   port = self->eglimage ? self->egl_out_port : self->dec_out_port;
 #else
@@ -2627,6 +2632,19 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
 
       if (!GST_CLOCK_TIME_IS_VALID(frame->output_buffer->pts) && self->video_info_changed) {
         frame->output_buffer = gst_buffer_ref (frame->output_buffer);
+#ifdef GST_VDEC_PUSH_EVENT_API_EXPOSED
+        for (cur = frame->events; cur; ) {
+          event = (GstEvent*) cur->data;
+          if (GST_EVENT_TYPE (event) == GST_EVENT_SEGMENT) {
+            GST_DEBUG_OBJECT (self, "Push the cached segment event before pushing new buffer");
+            gst_video_decoder_push_event (GST_VIDEO_DECODER (self), event);
+            frame->events = g_list_delete_link (frame->events, cur);
+            break;
+          }
+          cur = g_list_next (cur);
+        }
+#endif
+
         self->video_info_changed = FALSE;
         flow_ret = gst_pad_push (GST_VIDEO_DECODER_SRC_PAD (self), frame->output_buffer);
         gst_video_decoder_release_frame (GST_VIDEO_DECODER (self), frame);
