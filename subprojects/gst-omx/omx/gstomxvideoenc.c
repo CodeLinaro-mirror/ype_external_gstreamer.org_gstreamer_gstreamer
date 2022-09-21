@@ -3172,14 +3172,17 @@ gst_omx_video_enc_handle_frame (GstVideoEncoder * encoder,
           "Input buffer %p already has a OMX buffer associated: %p",
           frame->input_buffer, buf);
 
-      g_assert (!buf->input_buffer);
-      /* Prevent the buffer to be released to the pool while it's being
-       * processed by OMX. The reference will be dropped in EmptyBufferDone() */
-      buf->input_buffer = gst_buffer_ref (frame->input_buffer);
+      g_warn_if_fail(buf != NULL);
+      if (buf) {
+        g_assert (!buf->input_buffer);
+        /* Prevent the buffer to be released to the pool while it's being
+         * processed by OMX. The reference will be dropped in EmptyBufferDone() */
+        buf->input_buffer = gst_buffer_ref (frame->input_buffer);
 
-      acq_ret = GST_OMX_ACQUIRE_BUFFER_OK;
-      fill_buffer = FALSE;
-      buf->omx_buf->nFilledLen = gst_buffer_get_size (frame->input_buffer);
+        acq_ret = GST_OMX_ACQUIRE_BUFFER_OK;
+        fill_buffer = FALSE;
+        buf->omx_buf->nFilledLen = gst_buffer_get_size (frame->input_buffer);
+      }
     } else {
       acq_ret = gst_omx_port_acquire_buffer (port, &buf, GST_OMX_WAIT);
     }

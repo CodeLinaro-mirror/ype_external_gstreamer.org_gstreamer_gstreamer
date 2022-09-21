@@ -509,8 +509,10 @@ gst_omx_buffer_pool_acquire_buffer (GstBufferPool * bpool,
     /* If it's our own memory we have to set the sizes */
     if (!pool->other_pool) {
       GstOMXBuffer *omx_buf = gst_omx_memory_get_omx_buf (mem);
-      mem->size = omx_buf->omx_buf->nFilledLen;
-      mem->offset = omx_buf->omx_buf->nOffset;
+      if (omx_buf && omx_buf->omx_buf) {
+        mem->size = omx_buf->omx_buf->nFilledLen;
+        mem->offset = omx_buf->omx_buf->nOffset;
+      }
     }
   } else {
     /* Acquire any buffer that is available to be filled by upstream */
@@ -580,7 +582,7 @@ on_allocator_omxbuf_released (GstOMXAllocator * allocator,
 {
   OMX_ERRORTYPE err;
 
-  if (pool->port->port_def.eDir == OMX_DirOutput && !omx_buf->used &&
+  if (pool->port->port_def.eDir == OMX_DirOutput && omx_buf && !omx_buf->used &&
       !pool->deactivated) {
     /* Release back to the port, can be filled again */
     err = gst_omx_port_release_buffer (pool->port, omx_buf);

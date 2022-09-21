@@ -1691,6 +1691,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
           (self), GST_VIDEO_FORMAT_RGBA, interlace_mode,
           rect.nWidth, rect.nHeight, self->input_state);
 
+      g_assert(state);
       /* at this point state->caps is NULL */
       if (state->caps)
         gst_caps_unref (state->caps);

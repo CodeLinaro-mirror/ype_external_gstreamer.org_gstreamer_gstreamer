@@ -4144,7 +4144,7 @@ plugin_init (GstPlugin * plugin)
     types[i] ();
 
   elements = g_key_file_get_groups (config, &n_elements);
-  for (i = 0; i < n_elements; i++) {
+  for (i = 0; elements != NULL && i < n_elements; i++) {
     GTypeQuery type_query;
     GTypeInfo type_info = { 0, };
     GType type, subtype;

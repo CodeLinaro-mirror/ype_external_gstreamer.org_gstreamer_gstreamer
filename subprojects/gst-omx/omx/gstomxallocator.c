@@ -425,6 +425,10 @@ gst_omx_allocator_memory_dispose (GstMemory * mem)
     omx_mem = gst_mini_object_get_qdata (GST_MINI_OBJECT (mem),
         GST_OMX_MEMORY_QUARK);
 
+  if (omx_mem == NULL) {
+    return TRUE;
+  }
+
   if (omx_mem->acquired) {
     /* keep the memory alive */
     gst_memory_ref (mem);
