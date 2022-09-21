@@ -2684,9 +2684,26 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
           l->data);
       buf->eglimage = TRUE;
     } else {
-      err =
-          OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
-          port->port_def.nBufferSize);
+      if(port->enc_share_frame_buffer){
+        err = OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
+            sizeof(MetaBuffer));
+        if (err == OMX_ErrorNone && buf->omx_buf) {
+          OMX_S32 nFds = 1;
+          OMX_S32 nInts = 3;
+          MetaBuffer *pMetaBuffer = (MetaBuffer *)(buf->omx_buf->pBuffer);
+          if (pMetaBuffer) {
+            NativeHandle* pMetaHandle = (NativeHandle*)calloc((
+            sizeof(NativeHandle)+ sizeof(OMX_S32)*(nFds + nInts)), 1);
+            pMetaBuffer->meta_handle = pMetaHandle;
+            pMetaBuffer->buffer_type = CameraSource;
+          }
+        }
+        GST_DEBUG_OBJECT (comp->parent, "alloc metabuffer");
+      } else {
+        err =
+            OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
+            port->port_def.nBufferSize);
+      }
       buf->eglimage = FALSE;
     }
 
@@ -2751,8 +2768,14 @@ gst_omx_port_use_buffers (GstOMXPort * port, const GList * buffers)
   g_return_val_if_fail (port != NULL, OMX_ErrorUndefined);
 
   g_mutex_lock (&port->comp->lock);
-  n = g_list_length ((GList *) buffers);
-  err = gst_omx_port_allocate_buffers_unlocked (port, buffers, NULL, n);
+  if(NULL == buffers) {
+    err = gst_omx_port_allocate_buffers_unlocked (port, NULL, NULL, -1);
+  }
+  else {
+    n = g_list_length ((GList *) buffers);
+    err = gst_omx_port_allocate_buffers_unlocked (port, buffers, NULL, n);
+  }
+
   port->allocation = GST_OMX_BUFFER_ALLOCATION_USE_BUFFER;
   g_mutex_unlock (&port->comp->lock);
 
@@ -2980,6 +3003,11 @@ gst_omx_port_deallocate_buffers_unlocked (GstOMXPort * port)
       buf->omx_buf->pAppPrivate = NULL;
       GST_DEBUG_OBJECT (comp->parent, "%s: deallocating buffer %p (%p)",
           comp->name, buf, buf->omx_buf->pBuffer);
+
+      if(port->enc_share_frame_buffer && buf->omx_buf->pBuffer && ((MetaBuffer *)(buf->omx_buf->pBuffer))->meta_handle){
+        free(((MetaBuffer *)(buf->omx_buf->pBuffer))->meta_handle);
+        ((MetaBuffer *)(buf->omx_buf->pBuffer))->meta_handle = NULL;
+      }
 
       tmp = OMX_FreeBuffer (comp->handle, port->index, buf->omx_buf);
 
