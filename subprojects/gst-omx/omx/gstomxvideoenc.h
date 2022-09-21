@@ -119,6 +119,10 @@ struct _GstOMXVideoEnc
   guint32 mirror;
   guint32 intra_refresh_mode;
   guint32 intra_refresh_mbs;
+#ifdef _USE_TARGET_VPU554_
+  guint32 downscale_width;
+  guint32 downscale_height;
+#endif
   guint32 default_target_bitrate;
 
   GstFlowReturn downstream_flow_ret;
