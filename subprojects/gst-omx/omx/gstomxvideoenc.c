@@ -35,6 +35,12 @@
 #include "gstomxvideoenc.h"
 #include "OMX_QCOMExtns.h"
 
+#ifndef ALIGN
+#define ALIGN(__sz, __align) (((__align) & ((__align) - 1)) ?\
+    ((((__sz) + (__align) - 1) / (__align)) * (__align)) :\
+    (((__sz) + (__align) - 1) & (~((__align) - 1))))
+#endif
+
 #ifdef USE_OMX_TARGET_RPI
 #include <OMX_Broadcom.h>
 #include <OMX_Index.h>
@@ -343,6 +349,10 @@ enum
 #ifdef _USE_TARGET_VPU554_
   PROP_DOWNSCALE_WIDTH,
   PROP_DOWNSCALE_HEIGHT,
+  PROP_CROP_LEFT,
+  PROP_CROP_TOP,
+  PROP_CROP_WIDTH,
+  PROP_CROP_HEIGHT,
 #endif
 };
 
@@ -387,6 +397,10 @@ enum
 #ifdef _USE_TARGET_VPU554_
 #define GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_LEFT_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_TOP_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_WIDTH_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_HEIGHT_DEFAULT (0xffffffff)
 #endif
 
 /* ZYNQ_USCALE_PLUS encoder custom events */
@@ -705,6 +719,30 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_LEFT,
+      g_param_spec_uint ("crop-left", "crop left",
+          "crop left (0xffffffff=component default), should be 256 alignment, crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_LEFT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_TOP,
+      g_param_spec_uint ("crop-top", "crop top",
+          "crop top (0xffffffff=component default), crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_TOP_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_WIDTH,
+      g_param_spec_uint ("crop-width", "crop width",
+          "crop width (0xffffffff=component default), crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_WIDTH_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_HEIGHT,
+      g_param_spec_uint ("crop-height", "crop height",
+          "crop height (0xffffffff=component default), crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_HEIGHT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 #endif
 
   element_class->change_state =
@@ -785,6 +823,10 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
 #ifdef _USE_TARGET_VPU554_
   self->downscale_width = GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT;
   self->downscale_height = GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT;
+  self->crop_left = GST_OMX_VIDEO_ENC_CROP_LEFT_DEFAULT;
+  self->crop_top = GST_OMX_VIDEO_ENC_CROP_TOP_DEFAULT;
+  self->crop_width = GST_OMX_VIDEO_ENC_CROP_WIDTH_DEFAULT;
+  self->crop_height = GST_OMX_VIDEO_ENC_CROP_HEIGHT_DEFAULT;
 #endif
 
   g_mutex_init (&self->drain_lock);
@@ -1377,6 +1419,23 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
       }
     }
 #ifdef _USE_TARGET_VPU554_
+    if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+        && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+      if (self->downscale_width != 0xffffffff && self->downscale_height != 0xffffffff) {
+        if (self->crop_width != self->downscale_width || self->crop_height != self->downscale_height) {
+          GST_ERROR_OBJECT (self, "the width and height of crop and downscale should be identical, "
+              "if the two properties are set in the same time");
+          return FALSE;
+        }
+      } else if (self->downscale_width == 0xffffffff && self->downscale_width == 0xffffffff) {
+        /*the crop widht/height should be the same as the downscale width/height, respectively*/
+        self->downscale_width = self->crop_width;
+        self->downscale_height = self->crop_height;
+      } else {
+        GST_DEBUG_OBJECT (self, "Please check the downscale parameter and crop parameter");
+      }
+    }
+
     if (self->downscale_width != 0xffffffff && self->downscale_height != 0xffffffff) {
       QOMX_INDEXDOWNSCALAR downscalar_params;
       GST_OMX_INIT_STRUCT(&downscalar_params);
@@ -1398,6 +1457,25 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
             gst_omx_error_to_string (err), err);
         } else {
           GST_INFO_OBJECT(self, "set downscale width height :%d %d", self->downscale_width,self->downscale_height);
+        }
+      }
+    }
+    if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+      && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+      QOMX_INDEXEXTRADATATYPE crop_params;
+      GST_OMX_INIT_STRUCT(&crop_params);
+      if (self->enc) {
+        crop_params.nPortIndex = self->enc_in_port->index;
+        crop_params.bEnabled = OMX_TRUE;
+        crop_params.nIndex = OMX_ExtraDataFrameDimension;
+        err = gst_omx_component_set_parameter(self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamIndexExtraDataType, (OMX_PTR)&crop_params);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self,
+            "Failed to enable crop : %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+        } else {
+          GST_INFO_OBJECT(self, "enable crop: left:%d top:%d width:%d height:%d",
+            self->crop_left, self->crop_top, self->crop_width, self->crop_height);
         }
       }
     }
@@ -1628,6 +1706,22 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
     case PROP_DOWNSCALE_HEIGHT:
       self->downscale_height = g_value_get_uint (value);
       break;
+    case PROP_CROP_LEFT:
+      self->crop_left = g_value_get_uint (value);
+      if (self->crop_left % 256 != 0) {
+        g_warn_if_fail( self->crop_left % 256 == 0 && "crop left should be aligned by 256, automatically align it");
+        self->crop_left &= ~0xFF;
+      }
+      break;
+    case PROP_CROP_TOP:
+      self->crop_top = g_value_get_uint (value);
+      break;
+    case PROP_CROP_WIDTH:
+      self->crop_width = g_value_get_uint (value);
+      break;
+    case PROP_CROP_HEIGHT:
+      self->crop_height = g_value_get_uint (value);
+      break;
 #endif
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1763,6 +1857,18 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_DOWNSCALE_HEIGHT:
       g_value_set_uint(value,self->downscale_height);
+      break;
+    case PROP_CROP_LEFT:
+      g_value_set_uint(value,self->crop_left);
+      break;
+    case PROP_CROP_TOP:
+      g_value_set_uint(value,self->crop_top);
+      break;
+    case PROP_CROP_WIDTH:
+      g_value_set_uint(value,self->crop_width);
+      break;
+    case PROP_CROP_HEIGHT:
+      g_value_set_uint(value,self->crop_height);
       break;
 #endif
     default:
@@ -2958,6 +3064,16 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   GST_DEBUG_OBJECT (self, "Setting new input format: %" GST_PTR_FORMAT, caps);
   gst_caps_unref (caps);
 
+#ifdef _USE_TARGET_VPU554_
+  if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+    && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+    if (self->crop_width >= info->width || self->crop_height >= info->height) {
+    GST_ERROR_OBJECT (self, "Error crop width/height, max width/height is %d/%d", info->width, info->height);
+    return FALSE;
+    }
+  }
+#endif
+
   // If framerate changed during Executing state set new framerate through
   // OMX_SetConfig
   if (gst_omx_component_get_state (self->enc,
@@ -3311,6 +3427,54 @@ gst_omx_video_enc_semi_planar_manual_copy (GstOMXVideoEnc * self,
   return TRUE;
 }
 
+#ifdef _USE_TARGET_VPU554_
+static gboolean
+_process_input_crop_metadata (GstOMXVideoEnc * self, OMX_BUFFERHEADERTYPE *pOmxBuffer)
+{
+  GstVideoCodecState *state = gst_video_codec_state_ref (self->input_state);
+  GstVideoInfo *info = &state->info;
+  gboolean ret = TRUE;
+  int color_format = COLOR_FMT_NV12;
+  unsigned int y_stride, uv_stride, y_sclines, uv_sclines, y_plane, uv_plane;
+  unsigned int yuv_size = 0;
+  OMX_OTHER_EXTRADATATYPE *p_extra;
+  OMX_QCOM_EXTRADATA_FRAMEDIMENSION *framedimension_format;
+
+  if (self->crop_left == 0xffffffff || self->crop_top == 0xffffffff
+      || self->crop_width == 0xffffffff || self->crop_height == 0xffffffff)
+  {
+    return FALSE;
+  }
+
+  switch (info->finfo->format) {
+    case GST_VIDEO_FORMAT_NV12:
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, info->width);
+      uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, info->width);
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, info->height);
+      uv_sclines = VENUS_UV_SCANLINES(COLOR_FMT_NV12, info->height);
+      y_plane = y_stride * y_sclines;
+      uv_plane = uv_stride * uv_sclines;
+      yuv_size = ALIGN(y_plane + uv_plane, 4096);
+      GST_DEBUG_OBJECT (self, "yuv size:%d", yuv_size);
+      break;
+    default:
+      GST_ERROR_OBJECT (self, "Unsupported color format");
+      return FALSE;
+  }
+
+  p_extra = (OMX_OTHER_EXTRADATATYPE *) ((unsigned long long)(pOmxBuffer->pBuffer + yuv_size + 3)&(~3));
+  p_extra->eType = (OMX_EXTRADATATYPE) OMX_ExtraDataFrameDimension;
+  p_extra->nSize = sizeof(OMX_OTHER_EXTRADATATYPE) + sizeof(OMX_QCOM_EXTRADATA_FRAMEDIMENSION);
+  framedimension_format = (OMX_QCOM_EXTRADATA_FRAMEDIMENSION *)p_extra->data;
+  framedimension_format->nDecWidth = self->crop_left;
+  framedimension_format->nDecHeight = self->crop_top;
+  framedimension_format->nActualWidth = self->crop_width;
+  framedimension_format->nActualHeight = self->crop_height;
+
+  return ret;
+}
+#endif
+
 static gboolean
 gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     GstOMXBuffer * outbuf)
@@ -3536,6 +3700,13 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
       goto done;
       break;
   }
+
+#ifdef _USE_TARGET_VPU554_
+  if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+      && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+    _process_input_crop_metadata(self, outbuf->omx_buf);
+  }
+#endif
 
 done:
 

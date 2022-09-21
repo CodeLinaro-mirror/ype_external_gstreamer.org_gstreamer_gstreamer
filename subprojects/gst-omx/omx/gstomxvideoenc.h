@@ -122,6 +122,10 @@ struct _GstOMXVideoEnc
 #ifdef _USE_TARGET_VPU554_
   guint32 downscale_width;
   guint32 downscale_height;
+  guint32 crop_left;
+  guint32 crop_top;
+  guint32 crop_width;
+  guint32 crop_height;
 #endif
   guint32 default_target_bitrate;
 
