@@ -1875,6 +1875,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
           gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER
           (self), GST_VIDEO_FORMAT_RGBA, interlace_mode,
           rect.nWidth, rect.nHeight, self->input_state);
+      g_assert(state);
 
       /* at this point state->caps is NULL */
       if (state->caps)
@@ -2630,7 +2631,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
 
       buf = NULL;
 
-      if (!GST_CLOCK_TIME_IS_VALID(frame->output_buffer->pts) && self->video_info_changed) {
+      if (frame->output_buffer && !GST_CLOCK_TIME_IS_VALID(frame->output_buffer->pts) && self->video_info_changed) {
         frame->output_buffer = gst_buffer_ref (frame->output_buffer);
 #ifdef GST_VDEC_PUSH_EVENT_API_EXPOSED
         for (cur = frame->events; cur; ) {
