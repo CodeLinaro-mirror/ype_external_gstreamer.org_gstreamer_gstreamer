@@ -1024,6 +1024,13 @@ gst_omx_video_dec_fill_buffer (GstOMXVideoDec * self,
         src_size[1] = src_stride[1] * nslice;
         dst_height[1] = GST_VIDEO_INFO_FIELD_HEIGHT (vinfo);
         break;
+      case GST_VIDEO_FORMAT_P010_10LE:
+        dst_width[0] = GST_VIDEO_INFO_WIDTH (vinfo) * 2;//dst valid pixel occupied bytes
+        dst_width[1] = dst_width[0];
+        src_stride[1] = nstride;
+        src_size[1] = src_stride[1] * nslice / 2;
+        dst_height[1] = GST_VIDEO_INFO_FIELD_HEIGHT (vinfo) / 2;
+        break;
       default:
         g_assert_not_reached ();
         break;
@@ -2651,6 +2658,7 @@ const char *decode_color(OMX_COLOR_FORMATTYPE colorcode) {
   case OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m: return "OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m";
   case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed: return "QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed";
   case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m10bitCompressed: return "QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m10bitCompressed";
+  case QOMX_COLOR_FORMATYUV420SemiPlanarP010Venus: return "QOMX_COLOR_FORMATYUV420SemiPlanarP010Venus";
   default: return "Unknown color";
   }
 }
