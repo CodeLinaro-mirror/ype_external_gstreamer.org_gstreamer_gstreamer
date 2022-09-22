@@ -881,6 +881,27 @@ gst_omx_h265_enc_get_caps (GstOMXVideoEnc * enc, GstOMXPort * port,
         tier = "main";
         level = "6.2";
         break;
+      case OMX_VIDEO_HEVCHighTierLevel1:
+        tier = "high";
+        level = "1";
+        break;
+      case OMX_VIDEO_HEVCHighTierLevel2:
+        tier = "high";
+        level = "2";
+        break;
+      case OMX_VIDEO_HEVCHighTierLevel21:
+        tier = "high";
+        level = "2.1";
+        break;
+      case OMX_VIDEO_HEVCHighTierLevel3:
+        tier = "high";
+        level = "3";
+        break;
+      case OMX_VIDEO_HEVCHighTierLevel31:
+        tier = "high";
+        level = "3.1";
+        break;
+
       case OMX_VIDEO_HEVCHighTierLevel4:
         tier = "high";
         level = "4";
