@@ -1558,6 +1558,20 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
       }
     }
 
+    /* We share buffers between decoder output port and display. Display
+     * needs to hold some buffers, which makes the decoder lack of buffer
+     * in some cases. Therefore, increase count of decoder output buffer by 4.
+     */
+    if (!self->use_buffers) {
+      err = gst_omx_port_update_port_definition (port, NULL);
+      port->port_def.nBufferCountActual = port->port_def.nBufferCountActual + 4;
+      min = max = port->port_def.nBufferCountActual;
+      GST_DEBUG_OBJECT (self, "increased output buffer count to %d, min max also updated", port->port_def.nBufferCountActual);
+      if (err == OMX_ErrorNone) {
+        err = gst_omx_port_update_port_definition (port, &port->port_def);
+      }
+    }
+
     if (!self->use_buffers)
       err = gst_omx_port_allocate_buffers (port);
 
