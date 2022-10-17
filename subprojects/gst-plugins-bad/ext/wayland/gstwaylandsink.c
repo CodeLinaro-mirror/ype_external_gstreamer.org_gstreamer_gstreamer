@@ -828,7 +828,7 @@ gst_wl_egl_dmabuf_construct_wl_buffer (GstBuffer * buf, GstWlDisplay * display,
     attribs[11] = pixel_mem_fd;
     attribs[13] = GST_VIDEO_INFO_PLANE_OFFSET (info, 1);
     memcpy(attr, attribs, sizeof(attribs));
-  } else if (GST_VIDEO_FORMAT_INFO_IS_RGB(info)) {
+  } else if (GST_VIDEO_FORMAT_INFO_IS_RGB(info->finfo)) {
     //rgb 1 plane format
     EGLint attribs[] = {
       EGL_WIDTH, 0,
