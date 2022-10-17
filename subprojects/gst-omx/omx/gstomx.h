@@ -96,6 +96,8 @@
 
 G_BEGIN_DECLS
 #define _OMX_ZERO_MEMCOPY_RENDERING_
+#define _QTI_DMABUFFER_MODE_
+
 #if 0 /* Original Code is commented */
 #define GST_OMX_INIT_STRUCT(st) G_STMT_START { \
   memset ((st), 0, sizeof (*(st))); \
