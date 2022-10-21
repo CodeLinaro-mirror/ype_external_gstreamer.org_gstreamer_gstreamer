@@ -3527,7 +3527,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
   }
 
   if (!self->started) {
-    if (!GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame) && !header) {
+    if (!GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame)) {
       gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), frame);
       return GST_FLOW_OK;
     }
@@ -3658,6 +3658,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
       }
 
       buf->omx_buf->nFlags |= OMX_BUFFERFLAG_CODECCONFIG;
+      buf->omx_buf->nFlags |= OMX_BUFFERFLAG_ENDOFFRAME;
 
       if (GST_CLOCK_TIME_IS_VALID (timestamp))
         GST_OMX_SET_TICKS (buf->omx_buf->nTimeStamp,
@@ -3741,9 +3742,6 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
 
     if (first_ouput_buffer && GST_VIDEO_CODEC_FRAME_IS_SYNC_POINT (frame))
       buf->omx_buf->nFlags |= OMX_BUFFERFLAG_SYNCFRAME;
-
-    if (header)
-      buf->omx_buf->nFlags |= OMX_BUFFERFLAG_CODECCONFIG;
 
     /* TODO: Set flags
      *   - OMX_BUFFERFLAG_DECODEONLY for buffers that are outside
