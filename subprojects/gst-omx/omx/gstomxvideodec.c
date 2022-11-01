@@ -4364,6 +4364,16 @@ _get_gst_buffer_from_last_buffer (GstOMXVideoDec * self)
   }
 #endif
 
+#ifdef _QTI_DMABUFFER_MODE_
+  mem = gst_omx_memory_new (GST_OMX_BUFFER_POOL (self->out_port_pool)->allocator, last_buffer, 0, NULL, 0, -1);
+  mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags (GST_OMX_BUFFER_POOL (self->out_port_pool)->allocator->foreign_allocator,
+             pPMEMInfo->pmem_fd, pPMEMInfo->size, GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+  buf = gst_buffer_new ();
+  gst_buffer_append_memory (buf, mem->foreign_mem);
+  gst_mini_object_set_qdata (GST_MINI_OBJECT (mem->foreign_mem),
+          GST_OMX_MEMORY_QUARK, mem, NULL);
+  install_mem_dispose (mem);
+#else
   va_info = g_malloc (sizeof (GstVaInfo));
   if (!va_info) {
     GST_ERROR_OBJECT (self, "failed to alloc va_info");
@@ -4372,16 +4382,6 @@ _get_gst_buffer_from_last_buffer (GstOMXVideoDec * self)
   va_info->data = data;
   va_info->size = pPMEMInfo->size;
   va_info->fd = dup (pPMEMInfo->pmem_fd);
-#ifdef _QTI_DMABUFFER_MODE_
-  mem = gst_omx_memory_new (GST_OMX_BUFFER_POOL (self->out_port_pool)->allocator, last_buffer->omx_buf, 0, NULL, 0, -1);
-  mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags (GST_OMX_BUFFER_POOL (self->out_port_pool)->allocator,
-             va_info->fd, pPMEMInfo->size, GST_FD_MEMORY_FLAG_KEEP_MAPPED);
-  buf = gst_buffer_new ();
-  gst_buffer_append_memory (buf, mem);
-  gst_mini_object_set_qdata (GST_MINI_OBJECT (mem->foreign_mem),
-          GST_OMX_MEMORY_QUARK, mem, NULL);
-      install_mem_dispose (mem);
-#else
   buf = gst_buffer_new_wrapped_full (0, data,
              pPMEMInfo->size, pPMEMInfo->offset,
              pPMEMInfo->size, va_info, _gbm_buffer_destroy);
@@ -4423,7 +4423,7 @@ _get_gst_buffer_from_last_buffer (GstOMXVideoDec * self)
   if (gstVMeta) {
     gstVMeta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
     gstVMeta->offset[3] = pPMEMInfo->size;
-    gstVMeta->stride[2] = va_info->fd;
+    gstVMeta->stride[2] = pPMEMInfo->pmem_fd;
 #ifdef USE_GBM
     gstVMeta->stride[3] = pPMEMInfo->pmeta_fd;
 #else

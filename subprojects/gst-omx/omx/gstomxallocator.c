@@ -507,7 +507,7 @@ gst_omx_allocator_allocate (GstOMXAllocator * allocator, gint index,
       }
       fd = pPMEMInfo->pmem_fd;
       mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd, pPMEMInfo->size,
-      GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+      GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
 #else
       fd = GPOINTER_TO_INT (omx_buf->omx_buf->pBuffer);
       mem->foreign_mem =
