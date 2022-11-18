@@ -55,11 +55,8 @@
 #include "OMX_QCOMExtns.h"
 #endif
 
-#ifdef VIDC_TARGET_USES_GKI
 #include <vidc/media/msm_media_info.h>
-#else
-#include <media/msm_media_info.h>
-#endif
+
 #ifdef USE_GBM
 static G_DEFINE_QUARK (FBufModifierQuark, gst_fbuf_modifier_qdata);
 #endif

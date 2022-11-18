@@ -26,11 +26,7 @@
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/allocators/gstdmabuf.h>
-#ifdef VIDC_TARGET_USES_GKI
 #include <vidc/media/msm_media_info.h>
-#else
-#include <media/msm_media_info.h>
-#endif
 
 #include <string.h>
 
