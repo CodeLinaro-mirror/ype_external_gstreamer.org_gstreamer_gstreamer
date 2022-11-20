@@ -29,11 +29,7 @@
 #include "gstomxvideo.h"
 
 #include <gst/allocators/gstdmabuf.h>
-#ifdef VIDC_TARGET_USES_GKI
 #include <vidc/media/msm_media_info.h>
-#else
-#include <media/msm_media_info.h>
-#endif
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_buffer_pool_debug_category);
 #define GST_CAT_DEFAULT gst_omx_buffer_pool_debug_category
