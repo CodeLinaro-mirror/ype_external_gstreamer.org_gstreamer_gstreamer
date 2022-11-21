@@ -4342,6 +4342,9 @@ gst_omx_video_dec_get_recttype (GstOMXVideoDec * self,
 {
   GstOMXPort *port = self->dec_out_port;
 
+  g_return_if_fail (rect != NULL);
+  rect->nSize = sizeof(OMX_CONFIG_RECTTYPE);
+
   if (OMX_ErrorNone != gst_omx_component_get_config (port->comp,
        OMX_IndexConfigCommonOutputCrop, rect)) {
     rect->nLeft = 0;
