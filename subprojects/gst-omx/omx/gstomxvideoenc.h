@@ -36,6 +36,13 @@ typedef struct PrependSPSPPSToIDRFramesParams {
 } PrependSPSPPSToIDRFramesParams;
 #endif
 
+typedef enum {
+  GST_VIDEO_BITRATE_SAVING_MODE_DISABLE,
+  GST_VIDEO_BITRATE_SAVING_MODE_8BIT,
+  GST_VIDEO_BITRATE_SAVING_MODE_10BIT,
+  GST_VIDEO_BITRATE_SAVING_MODE_ALL,
+} GstOMXVideoEncBitrateSavingMode;
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_OMX_VIDEO_ENC \
@@ -115,6 +122,7 @@ struct _GstOMXVideoEnc
   guint32 long_term_freq;
   guint32 look_ahead;
 #endif
+  GstOMXVideoEncBitrateSavingMode bitrate_saving_mode;
 
   guint32 rotation;
   guint32 mirror;
