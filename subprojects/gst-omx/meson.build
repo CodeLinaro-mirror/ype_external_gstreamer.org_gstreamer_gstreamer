@@ -241,7 +241,7 @@ endif
 
 message ('OMX target: ' + omx_target)
 
-omx_enable_target_vpu554 = get_option('enable-target-vpu554')
+omx_enable_target_6155 = get_option('enable-target-6155')
 
 extra_video_headers = ''
 # Check for optional OpenMAX extension headers

@@ -10,8 +10,8 @@ option('target', type : 'combo',
 option('struct_packing', type : 'combo',
     choices : ['0', '1', '2', '4', '8'], value : '0',
     description : 'Force OpenMAX struct packing')
-option('enable-target-vpu554', type : 'string', value : '',
-    description : 'enable target vpu554')
+option('enable-target-6155', type : 'string', value : '',
+    description : 'enable target 6155 with vpu443')
 
 # Common feature options
 option('examples', type : 'feature', value : 'auto', yield : true)
