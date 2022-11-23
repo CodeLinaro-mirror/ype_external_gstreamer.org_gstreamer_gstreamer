@@ -242,11 +242,6 @@ endif
 message ('OMX target: ' + omx_target)
 
 omx_enable_target_vpu554 = get_option('enable-target-vpu554')
-if omx_enable_target_vpu554 == 'yes'
-  cdata.set('_USE_TARGET_VPU554_', 1)
-else
-  cdata.set('_USE_TARGET_VPU554_', 0)
-endif
 
 extra_video_headers = ''
 # Check for optional OpenMAX extension headers
