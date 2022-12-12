@@ -21,21 +21,38 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include <stdio.h>
 
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/allocators/gstdmabuf.h>
+#include <vidc/media/msm_media_info.h>
 
 #include <string.h>
 
 #include "gstomxbufferpool.h"
 #include "gstomxvideo.h"
 #include "gstomxvideoenc.h"
+#include "OMX_QCOMExtns.h"
+#include <gbm_priv.h>
+
+#ifndef ALIGN
+#define ALIGN(__sz, __align) (((__align) & ((__align) - 1)) ?\
+    ((((__sz) + (__align) - 1) / (__align)) * (__align)) :\
+    (((__sz) + (__align) - 1) & (~((__align) - 1))))
+#endif
 
 #ifdef USE_OMX_TARGET_RPI
 #include <OMX_Broadcom.h>
 #include <OMX_Index.h>
 #endif
+
+struct StoreMetaDataInBuffersParams {
+    OMX_U32 nSize;
+    OMX_VERSIONTYPE nVersion;
+    OMX_U32 nPortIndex;
+    OMX_BOOL bStoreMetaData;
+};
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_video_enc_debug_category);
 #define GST_CAT_DEFAULT gst_omx_video_enc_debug_category
@@ -55,6 +72,9 @@ gst_omx_video_enc_control_rate_get_type (void)
           "variable-skip-frames"},
       {OMX_Video_ControlRateConstantSkipFrames, "Constant Skip Frames",
           "constant-skip-frames"},
+      {QOMX_Video_ControlRateMaxBitrate, "MaxBitrate", "max-bitrate"},
+      {QOMX_Video_ControlRateMaxBitrateSkipFrames, "MaxBitrate Skip Frames",
+        "max-bitrate-skip-frames"},
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
       {OMX_ALG_Video_ControlRateLowLatency, "Low Latency", "low-latency"},
 #endif
@@ -63,6 +83,44 @@ gst_omx_video_enc_control_rate_get_type (void)
     };
 
     qtype = g_enum_register_static ("GstOMXVideoEncControlRate", values);
+  }
+  return qtype;
+}
+
+#define GST_TYPE_OMX_VIDEO_ENC_MIRROR (gst_omx_video_enc_mirror_get_type ())
+static GType
+gst_omx_video_enc_mirror_get_type (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {OMX_MirrorNone, "None", "none"},
+      {OMX_MirrorVertical, "Vertical", "vertical"},
+      {OMX_MirrorHorizontal, "Horizontal", "horizontal"},
+      {OMX_MirrorBoth, "Both", "both"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstOMXVideoEncMirror", values);
+  }
+  return qtype;
+}
+
+#define GST_TYPE_OMX_VIDEO_ENC_INTRA_REFRESH_MODE (gst_omx_video_enc_intra_refresh_mode_get_type ())
+static GType
+gst_omx_video_enc_intra_refresh_mode_get_type (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {OMX_VIDEO_IntraRefreshCyclic, "Cyclic", "cyclic"},
+      {0x7fffffff, "Component Default", "default"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstOMXVideoEncIntraRefreshMode", values);
   }
   return qtype;
 }
@@ -219,6 +277,27 @@ gst_omx_video_enc_roi_quality_type (void)
 }
 #endif
 
+#define GST_TYPE_OMX_VIDEO_ENC_BITRATE_SAVING_MODE (gst_omx_video_enc_get_bitrate_saving_mode ())
+static GType
+gst_omx_video_enc_get_bitrate_saving_mode (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {GST_VIDEO_BITRATE_SAVING_MODE_DISABLE, "Disable", "disable"},
+      {GST_VIDEO_BITRATE_SAVING_MODE_8BIT, "Only enable 8 bit saving mode", "only enable 8 bit saving mode"},
+      {GST_VIDEO_BITRATE_SAVING_MODE_10BIT, "Only enable 10 bit saving mode", "only enable 10 bit saving mode"},
+      {GST_VIDEO_BITRATE_SAVING_MODE_ALL, "Enable all saving mode", "enable all saving mode"},
+      {0xffffffff, "Component Default", "default"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstOMXVideoEncBitrateSavingMode", values);
+  }
+  return qtype;
+}
+
 /* prototypes */
 static void gst_omx_video_enc_finalize (GObject * object);
 static void gst_omx_video_enc_set_property (GObject * object, guint prop_id,
@@ -264,6 +343,16 @@ enum
   PROP_QUANT_I_FRAMES,
   PROP_QUANT_P_FRAMES,
   PROP_QUANT_B_FRAMES,
+  PROP_INIT_QUANT_I_FRAMES,
+  PROP_INIT_QUANT_P_FRAMES,
+  PROP_INIT_QUANT_B_FRAMES,
+  PROP_MIN_QUANT_I_FRAMES,
+  PROP_MAX_QUANT_I_FRAMES,
+  PROP_MIN_QUANT_P_FRAMES,
+  PROP_MAX_QUANT_P_FRAMES,
+  PROP_MIN_QUANT_B_FRAMES,
+  PROP_MAX_QUANT_B_FRAMES,
+  PROP_SHARE_BUFFER,
   PROP_QP_MODE,
   PROP_MIN_QP,
   PROP_MAX_QP,
@@ -283,6 +372,17 @@ enum
   PROP_LONGTERM_REF,
   PROP_LONGTERM_FREQUENCY,
   PROP_LOOK_AHEAD,
+  PROP_ROTATION,
+  PROP_MIRROR,
+  PROP_INTRA_REFRESH_MODE,
+  PROP_INTRA_REFRESH_MBS,
+  PROP_DOWNSCALE_WIDTH,
+  PROP_DOWNSCALE_HEIGHT,
+  PROP_CROP_LEFT,
+  PROP_CROP_TOP,
+  PROP_CROP_WIDTH,
+  PROP_CROP_HEIGHT,
+  PROP_TARGET_BITRATE_SAVING_MODE,
 };
 
 /* FIXME: Better defaults */
@@ -291,6 +391,17 @@ enum
 #define GST_OMX_VIDEO_ENC_QUANT_I_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_QUANT_P_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_INIT_QUANT_I_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_INIT_QUANT_P_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MIN_QUANT_I_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MIN_QUANT_P_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT FALSE
+
 #define GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT (10)
 #define GST_OMX_VIDEO_ENC_MAX_QP_DEFAULT (51)
@@ -310,6 +421,16 @@ enum
 #define GST_OMX_VIDEO_ENC_LONGTERM_REF_DEFAULT (FALSE)
 #define GST_OMX_VIDEO_ENC_LONGTERM_FREQUENCY_DEFAULT (0)
 #define GST_OMX_VIDEO_ENC_LOOK_AHEAD_DEFAULT (0)
+#define GST_OMX_VIDEO_ENC_ROTATION_DEFAULT (0)
+#define GST_OMX_VIDEO_ENC_MIRROR_DEFAULT (0)
+#define GST_OMX_VIDEO_ENC_INTRA_REFRESH_MODE_DEFAULT (0x7fffffff)
+#define GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_LEFT_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_TOP_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_WIDTH_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_CROP_HEIGHT_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_BITRATE_SAVING_MODE_DEFAULT (0xffffffff)
 
 /* ZYNQ_USCALE_PLUS encoder custom events */
 #define OMX_ALG_GST_EVENT_INSERT_LONGTERM "omx-alg/insert-longterm"
@@ -371,6 +492,77 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
       g_param_spec_uint ("quant-b-frames", "B-Frame Quantization",
           "Quantization parameter for B-frames (0xffffffff=component default)",
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_INIT_QUANT_I_FRAMES,
+      g_param_spec_uint ("init-quant-i-frames", "Initial I-Frame Quantization",
+          "Initial Quantization parameter for I-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_I_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_INIT_QUANT_P_FRAMES,
+      g_param_spec_uint ("init-quant-p-frames", "Initial P-Frame Quantization",
+          "Initial Quantization parameter for P-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_P_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_INIT_QUANT_B_FRAMES,
+      g_param_spec_uint ("init-quant-b-frames", "Initial B-Frame Quantization",
+          "Initial Quantization parameter for B-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIN_QUANT_I_FRAMES,
+      g_param_spec_uint ("min-quant-i-frames", "I-Frame Min Quantization",
+          "Min Quantization parameter for I-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MIN_QUANT_I_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_QUANT_I_FRAMES,
+      g_param_spec_uint ("max-quant-i-frames", "I-Frame Max Quantization",
+          "Max Quantization parameter for I-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIN_QUANT_P_FRAMES,
+      g_param_spec_uint ("min-quant-p-frames", "P-Frame Min Quantization",
+          "Max Quantization parameter for P-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MIN_QUANT_P_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_QUANT_P_FRAMES,
+      g_param_spec_uint ("max-quant-p-frames", "P-Frame Max Quantization",
+          "Max Quantization parameter for P-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIN_QUANT_B_FRAMES,
+      g_param_spec_uint ("min-quant-b-frames", "B-Frame Min Quantization",
+          "Min Quantization parameter for B-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MAX_QUANT_B_FRAMES,
+      g_param_spec_uint ("max-quant-b-frames", "B-Frame Max Quantization",
+          "Max Quantization parameter for B-frames (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_SHARE_BUFFER,
+      g_param_spec_boolean ("share-buffer",
+          "share buffer with source",
+          "share buffer with source",
+          GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -521,6 +713,80 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 #endif
+  g_object_class_install_property (gobject_class, PROP_ROTATION,
+      g_param_spec_uint ("rotation", "Rotate the input frame",
+          "rotate (0=no rotation)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_ROTATION_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_MIRROR,
+      g_param_spec_enum ("mirror", "mirror the input frame",
+          "mirror (0=donot mirror)",
+          GST_TYPE_OMX_VIDEO_ENC_MIRROR,
+          GST_OMX_VIDEO_ENC_MIRROR_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_INTRA_REFRESH_MODE,
+      g_param_spec_enum ("intra-refresh-mode", "Intra refresh mode",
+          "Intra refresh mode, only support cyclic mode on latest FW",
+          GST_TYPE_OMX_VIDEO_ENC_INTRA_REFRESH_MODE,
+          GST_OMX_VIDEO_ENC_INTRA_REFRESH_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_INTRA_REFRESH_MBS,
+      g_param_spec_uint ("intra-refresh-mbs", "Intra refresh mbs",
+          "Number of consecutive macroblocks to be coded as intra, the number will be 4-aligned",
+          0, G_MAXUINT, 0,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_DOWNSCALE_WIDTH,
+      g_param_spec_uint ("downscale-width", "downscale width",
+          "downscale_width (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_DOWNSCALE_HEIGHT,
+      g_param_spec_uint ("downscale-height", "downscale height",
+          "downscale_height (0xffffffff=component default)",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_LEFT,
+      g_param_spec_uint ("crop-left", "crop left",
+          "crop left (0xffffffff=component default), should be 256 alignment, crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_LEFT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_TOP,
+      g_param_spec_uint ("crop-top", "crop top",
+          "crop top (0xffffffff=component default), crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_TOP_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_WIDTH,
+      g_param_spec_uint ("crop-width", "crop width",
+          "crop width (0xffffffff=component default), crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_WIDTH_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_CROP_HEIGHT,
+      g_param_spec_uint ("crop-height", "crop height",
+          "crop height (0xffffffff=component default), crop feature only valid for NV12 without UBWC",
+          0, G_MAXUINT, GST_OMX_VIDEO_ENC_CROP_HEIGHT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_TARGET_BITRATE_SAVING_MODE,
+      g_param_spec_enum ("bps-saving-mode", "Bps saving mode",
+          "Bitrate saving mode (0xffffffff=component default)",
+          GST_TYPE_OMX_VIDEO_ENC_BITRATE_SAVING_MODE,
+          GST_OMX_VIDEO_ENC_BITRATE_SAVING_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_enc_change_state);
@@ -545,7 +811,9 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
 
   klass->cdata.type = GST_OMX_COMPONENT_TYPE_FILTER;
   klass->cdata.default_sink_template_caps =
-      GST_VIDEO_CAPS_MAKE (GST_OMX_VIDEO_ENC_SUPPORTED_FORMATS);
+    GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
+            "{ NV12 }") ";"
+      GST_VIDEO_CAPS_MAKE (GST_OMX_VIDEO_SUPPORTED_FORMATS);
 
   klass->handle_output_frame =
       GST_DEBUG_FUNCPTR (gst_omx_video_enc_handle_output_frame);
@@ -559,6 +827,17 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
   self->quant_i_frames = GST_OMX_VIDEO_ENC_QUANT_I_FRAMES_DEFAULT;
   self->quant_p_frames = GST_OMX_VIDEO_ENC_QUANT_P_FRAMES_DEFAULT;
   self->quant_b_frames = GST_OMX_VIDEO_ENC_QUANT_B_FRAMES_DEFAULT;
+  self->init_quant_i_frames = GST_OMX_VIDEO_ENC_INIT_QUANT_I_FRAMES_DEFAULT;
+  self->init_quant_p_frames = GST_OMX_VIDEO_ENC_INIT_QUANT_P_FRAMES_DEFAULT;
+  self->init_quant_b_frames = GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT;
+  self->min_quant_i_frames = GST_OMX_VIDEO_ENC_MIN_QUANT_I_FRAMES_DEFAULT;
+  self->min_quant_p_frames = GST_OMX_VIDEO_ENC_MIN_QUANT_P_FRAMES_DEFAULT;
+  self->min_quant_b_frames = GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT;
+  self->max_quant_i_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT;
+  self->max_quant_p_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT;
+  self->max_quant_b_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT;
+  self->enc_share_frame_buffer = GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT;
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   self->qp_mode = GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT;
   self->min_qp = GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT;
@@ -582,6 +861,17 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
 #endif
 
   self->default_target_bitrate = GST_OMX_PROP_OMX_DEFAULT;
+  self->rotation = GST_OMX_VIDEO_ENC_ROTATION_DEFAULT;
+  self->mirror = GST_OMX_VIDEO_ENC_MIRROR_DEFAULT;
+  self->intra_refresh_mode = GST_OMX_VIDEO_ENC_INTRA_REFRESH_MODE_DEFAULT;
+  self->intra_refresh_mbs = 0;
+  self->downscale_width = GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT;
+  self->downscale_height = GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT;
+  self->crop_left = GST_OMX_VIDEO_ENC_CROP_LEFT_DEFAULT;
+  self->crop_top = GST_OMX_VIDEO_ENC_CROP_TOP_DEFAULT;
+  self->crop_width = GST_OMX_VIDEO_ENC_CROP_WIDTH_DEFAULT;
+  self->crop_height = GST_OMX_VIDEO_ENC_CROP_HEIGHT_DEFAULT;
+  self->bitrate_saving_mode = GST_OMX_VIDEO_ENC_BITRATE_SAVING_MODE_DEFAULT;
 
   g_mutex_init (&self->drain_lock);
   g_cond_init (&self->drain_cond);
@@ -998,10 +1288,10 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
   /* Set properties */
   {
     OMX_ERRORTYPE err;
-
-    if (!gst_omx_video_enc_set_bitrate (self))
-      return FALSE;
-
+    if (self->control_rate != 0xffffffff || self->target_bitrate != 0xffffffff) {
+      if (!gst_omx_video_enc_set_bitrate (self))
+        return FALSE;
+    }
     if (self->quant_i_frames != 0xffffffff ||
         self->quant_p_frames != 0xffffffff ||
         self->quant_b_frames != 0xffffffff) {
@@ -1045,7 +1335,210 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
 
       }
     }
+    if (self->init_quant_i_frames != 0xffffffff ||
+      self->init_quant_p_frames != 0xffffffff ||
+      self->init_quant_b_frames != 0xffffffff) {
+      QOMX_EXTNINDEX_VIDEO_INITIALQP initQP;
+
+      GST_OMX_INIT_STRUCT (&initQP);
+      initQP.nPortIndex = self->enc_out_port->index;
+
+      err = gst_omx_component_get_parameter (self->enc,
+        (OMX_INDEXTYPE)QOMX_IndexParamVideoInitialQp, &initQP);
+
+      if (err == OMX_ErrorNone) {
+
+        if (self->init_quant_i_frames != 0xffffffff)
+        initQP.nQpI = self->init_quant_i_frames;
+        if (self->init_quant_p_frames != 0xffffffff)
+        initQP.nQpP = self->init_quant_p_frames;
+        if (self->init_quant_b_frames != 0xffffffff)
+        initQP.nQpB = self->init_quant_b_frames;
+
+        initQP.bEnableInitQp = 1;
+
+        err =
+          gst_omx_component_set_parameter (self->enc,
+          (OMX_INDEXTYPE)QOMX_IndexParamVideoInitialQp, &initQP);
+        if (err == OMX_ErrorUnsupportedIndex) {
+        GST_WARNING_OBJECT (self,
+          "Setting initial quantization parameters not supported by the component");
+        } else if (err == OMX_ErrorUnsupportedSetting) {
+        GST_WARNING_OBJECT (self,
+          "Setting initial quantization parameters %u %u %u not supported by the component",
+          self->init_quant_i_frames, self->init_quant_p_frames, self->init_quant_b_frames);
+        } else if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+          "Failed to set initial quantization parameters: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+        return FALSE;
+        }
+      } else {
+        GST_ERROR_OBJECT (self,
+          "Failed to get initial quantization parameters: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+      }
+    }
+
+    if (self->min_quant_i_frames != 0xffffffff || self->min_quant_p_frames != 0xffffffff || self->min_quant_b_frames != 0xffffffff ||
+      self->max_quant_i_frames != 0xffffffff || self->max_quant_p_frames != 0xffffffff || self->max_quant_b_frames != 0xffffffff) {
+      OMX_QCOM_VIDEO_PARAM_IPB_QPRANGETYPE QPRanges;
+      GST_OMX_INIT_STRUCT (&QPRanges);
+      QPRanges.nPortIndex = self->enc_out_port->index;
+      err = gst_omx_component_get_parameter (self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamVideoIPBQPRange, &QPRanges);
+      if (err == OMX_ErrorNone) {
+        GST_DEBUG_OBJECT (self, "Got QP range, I %d-%d, P %d-%d, B %d-%d, will change qp range based on it", QPRanges.minIQP, QPRanges.maxIQP, QPRanges.minPQP, QPRanges.maxPQP, QPRanges.minBQP, QPRanges.maxBQP);
+        if (self->min_quant_i_frames != 0xffffffff)
+        QPRanges.minIQP = self->min_quant_i_frames;
+        if (self->min_quant_p_frames != 0xffffffff)
+        QPRanges.minPQP = self->min_quant_p_frames;
+        if (self->min_quant_b_frames != 0xffffffff)
+        QPRanges.minBQP = self->min_quant_b_frames;
+        if (self->max_quant_i_frames != 0xffffffff)
+        QPRanges.maxIQP = self->max_quant_i_frames;
+        if (self->max_quant_p_frames != 0xffffffff)
+        QPRanges.maxPQP = self->max_quant_p_frames;
+        if (self->max_quant_b_frames != 0xffffffff)
+        QPRanges.maxBQP = self->max_quant_b_frames;
+
+        if (QPRanges.minIQP > QPRanges.maxIQP || QPRanges.minPQP > QPRanges.maxPQP || QPRanges.minBQP > QPRanges.maxBQP) {
+        //If user only set min QP, it probably bigger than default max QP, user should set a bigger max QP. The same for max QP.
+        GST_ERROR_OBJECT (self, "QP range not reasonable, I %d-%d, P %d-%d, B %d-%d", QPRanges.minIQP, QPRanges.maxIQP, QPRanges.minPQP, QPRanges.maxPQP, QPRanges.minBQP, QPRanges.maxBQP);
+        return FALSE;
+        }
+
+        err = gst_omx_component_set_parameter (self->enc,
+          (OMX_INDEXTYPE)OMX_QcomIndexParamVideoIPBQPRange, &QPRanges);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self, "Failed to set I/P/B QP range parameters: %s (0x%08x)", gst_omx_error_to_string (err), err);
+          return FALSE;
+        }
+      } else {
+        GST_ERROR_OBJECT (self, "Failed to get I/P/B QP range parameters: %s (0x%08x)", gst_omx_error_to_string (err), err);
+      }
+    }
+
+    if (self->mirror) {
+      OMX_CONFIG_MIRRORTYPE framemirror;
+      GST_OMX_INIT_STRUCT (&framemirror);
+      if (self->enc) {
+        OMX_ERRORTYPE err;
+        framemirror.nPortIndex = self->enc_out_port->index;
+        framemirror.eMirror = (OMX_MIRRORTYPE)self->mirror;
+        err = gst_omx_component_set_config(self->enc, OMX_IndexConfigCommonMirror, (OMX_PTR)&framemirror);
+        if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+          "Failed to set mirror parameter: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+        } else {
+        GST_INFO_OBJECT(self, "set mirror:%d", self->mirror);
+        }
+      }
+    }
+
+    if (self->intra_refresh_mode != 0x7fffffff && self->intra_refresh_mbs != 0) {
+      OMX_VIDEO_PARAM_INTRAREFRESHTYPE intra_refresh;
+      GST_OMX_INIT_STRUCT (&intra_refresh);
+      err = gst_omx_component_get_parameter (self->enc, (OMX_INDEXTYPE)OMX_IndexParamVideoIntraRefresh, &intra_refresh);
+
+      if (err == OMX_ErrorNone) {
+        GST_INFO_OBJECT (self, "get intra refresh:%d mbs:%d", intra_refresh.eRefreshMode, intra_refresh.nCirMBs);
+
+        intra_refresh.nPortIndex = self->enc_out_port->index;
+        intra_refresh.eRefreshMode = (OMX_VIDEO_INTRAREFRESHTYPE)self->intra_refresh_mode;
+        intra_refresh.nCirMBs = self->intra_refresh_mbs;
+        err = gst_omx_component_set_parameter (self->enc, (OMX_INDEXTYPE)OMX_IndexParamVideoIntraRefresh, &intra_refresh);
+        if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+          "Failed to set intra refresh parameter: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+        return FALSE;
+        } else {
+        GST_INFO_OBJECT (self, "set intra refresh:%d mbs:%d", self->intra_refresh_mode, self->intra_refresh_mbs);
+        }
+      } else {
+        GST_ERROR_OBJECT (self,
+          "Failed to get intra refresh parameter: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+      }
+    }
+
+    if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+        && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+      if (self->downscale_width != 0xffffffff && self->downscale_height != 0xffffffff) {
+        if (self->crop_width != self->downscale_width || self->crop_height != self->downscale_height) {
+          GST_ERROR_OBJECT (self, "the width and height of crop and downscale should be identical, "
+              "if the two properties are set in the same time");
+          return FALSE;
+        }
+      } else if (self->downscale_width == 0xffffffff && self->downscale_width == 0xffffffff) {
+        /*the crop widht/height should be the same as the downscale width/height, respectively*/
+        self->downscale_width = self->crop_width;
+        self->downscale_height = self->crop_height;
+      } else {
+        GST_DEBUG_OBJECT (self, "Please check the downscale parameter and crop parameter");
+      }
+    }
+
+    if (self->downscale_width != 0xffffffff && self->downscale_height != 0xffffffff) {
+      QOMX_INDEXDOWNSCALAR downscalar_params;
+      GST_OMX_INIT_STRUCT(&downscalar_params);
+      if (self->enc) {
+        downscalar_params.nPortIndex = self->enc_out_port->index;
+        err = gst_omx_component_get_parameter(self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamVideoDownScalar,(OMX_PTR)&downscalar_params);
+        if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+          "Failed to get downscaleparameter: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+        }
+        downscalar_params.bEnable = OMX_TRUE;
+        downscalar_params.nOutputWidth = self->downscale_width;
+        downscalar_params.nOutputHeight = self->downscale_height;
+        err = gst_omx_component_set_parameter(self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamVideoDownScalar,(OMX_PTR)&downscalar_params);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self,
+            "Failed to set downscale parameter: %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+        } else {
+          GST_INFO_OBJECT(self, "set downscale width height :%d %d", self->downscale_width,self->downscale_height);
+        }
+      }
+    }
+    if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+      && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+      QOMX_INDEXEXTRADATATYPE crop_params;
+      GST_OMX_INIT_STRUCT(&crop_params);
+      if (self->enc) {
+        crop_params.nPortIndex = self->enc_in_port->index;
+        crop_params.bEnabled = OMX_TRUE;
+        crop_params.nIndex = OMX_ExtraDataFrameDimension;
+        err = gst_omx_component_set_parameter(self->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamIndexExtraDataType, (OMX_PTR)&crop_params);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT (self,
+            "Failed to enable crop : %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+        } else {
+          GST_INFO_OBJECT(self, "enable crop: left:%d top:%d width:%d height:%d",
+            self->crop_left, self->crop_top, self->crop_width, self->crop_height);
+        }
+      }
+    }
+
+    if (self->enc && self->bitrate_saving_mode != 0xffffffff) {
+      err =
+        gst_omx_component_set_config (self->enc,
+        OMX_QTIIndexConfigContentAdaptiveCoding, &(self->bitrate_saving_mode));
+
+      if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+          "Failed to set bitrate saving mode: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+      } else {
+        GST_INFO_OBJECT(self, "set bitrate saving mode %d\n", self->bitrate_saving_mode);
+      }
+    }
   }
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   if (!set_zynqultrascaleplus_props (self))
     return FALSE;
@@ -1154,6 +1647,9 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
       }
       GST_OBJECT_UNLOCK (self);
       break;
+    case PROP_TARGET_BITRATE_SAVING_MODE:
+      self->bitrate_saving_mode = g_value_get_enum (value);
+      break;
     case PROP_QUANT_I_FRAMES:
       self->quant_i_frames = g_value_get_uint (value);
       break;
@@ -1162,6 +1658,36 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
       break;
     case PROP_QUANT_B_FRAMES:
       self->quant_b_frames = g_value_get_uint (value);
+      break;
+    case PROP_INIT_QUANT_I_FRAMES:
+      self->init_quant_i_frames = g_value_get_uint (value);
+      break;
+    case PROP_INIT_QUANT_P_FRAMES:
+      self->init_quant_p_frames = g_value_get_uint (value);
+      break;
+    case PROP_INIT_QUANT_B_FRAMES:
+      self->init_quant_b_frames = g_value_get_uint (value);
+      break;
+    case PROP_MIN_QUANT_I_FRAMES:
+      self->min_quant_i_frames = g_value_get_uint (value);
+      break;
+    case PROP_MIN_QUANT_P_FRAMES:
+      self->min_quant_p_frames = g_value_get_uint (value);
+      break;
+    case PROP_MIN_QUANT_B_FRAMES:
+      self->min_quant_b_frames = g_value_get_uint (value);
+      break;
+    case PROP_MAX_QUANT_I_FRAMES:
+      self->max_quant_i_frames = g_value_get_uint (value);
+      break;
+    case PROP_MAX_QUANT_P_FRAMES:
+      self->max_quant_p_frames = g_value_get_uint (value);
+      break;
+    case PROP_MAX_QUANT_B_FRAMES:
+      self->max_quant_b_frames = g_value_get_uint (value);
+      break;
+    case PROP_SHARE_BUFFER:
+      self->enc_share_frame_buffer = g_value_get_boolean (value);
       break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
@@ -1222,6 +1748,42 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
       self->look_ahead = g_value_get_uint (value);
       break;
 #endif
+    case PROP_ROTATION:
+      self->rotation = g_value_get_uint (value);
+      GST_INFO_OBJECT(self, "set rotation:%d", self->rotation);
+      break;
+    case PROP_MIRROR:
+      self->mirror = g_value_get_enum (value);
+      GST_INFO_OBJECT(self, "set mirror:%d", self->mirror);
+      break;
+    case PROP_INTRA_REFRESH_MODE:
+      self->intra_refresh_mode = g_value_get_enum (value);
+      break;
+    case PROP_INTRA_REFRESH_MBS:
+      self->intra_refresh_mbs = g_value_get_uint (value);
+      break;
+    case PROP_DOWNSCALE_WIDTH:
+      self->downscale_width= g_value_get_uint (value);
+      break;
+    case PROP_DOWNSCALE_HEIGHT:
+      self->downscale_height = g_value_get_uint (value);
+      break;
+    case PROP_CROP_LEFT:
+      self->crop_left = g_value_get_uint (value);
+      if (self->crop_left % 256 != 0) {
+        g_warn_if_fail( self->crop_left % 256 == 0 && "crop left should be aligned by 256, automatically align it");
+        self->crop_left &= ~0xFF;
+      }
+      break;
+    case PROP_CROP_TOP:
+      self->crop_top = g_value_get_uint (value);
+      break;
+    case PROP_CROP_WIDTH:
+      self->crop_width = g_value_get_uint (value);
+      break;
+    case PROP_CROP_HEIGHT:
+      self->crop_height = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1243,6 +1805,9 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_uint (value, self->target_bitrate);
       GST_OBJECT_UNLOCK (self);
       break;
+    case PROP_TARGET_BITRATE_SAVING_MODE:
+      g_value_set_enum (value, self->bitrate_saving_mode);
+      break;
     case PROP_QUANT_I_FRAMES:
       g_value_set_uint (value, self->quant_i_frames);
       break;
@@ -1251,6 +1816,36 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_QUANT_B_FRAMES:
       g_value_set_uint (value, self->quant_b_frames);
+      break;
+    case PROP_INIT_QUANT_I_FRAMES:
+      g_value_set_uint (value, self->init_quant_i_frames);
+      break;
+    case PROP_INIT_QUANT_P_FRAMES:
+      g_value_set_uint (value, self->init_quant_p_frames);
+      break;
+    case PROP_INIT_QUANT_B_FRAMES:
+      g_value_set_uint (value, self->init_quant_b_frames);
+      break;
+    case PROP_MIN_QUANT_I_FRAMES:
+      g_value_set_uint (value, self->min_quant_i_frames);
+      break;
+    case PROP_MIN_QUANT_P_FRAMES:
+      g_value_set_uint (value, self->min_quant_p_frames);
+      break;
+    case PROP_MIN_QUANT_B_FRAMES:
+      g_value_set_uint (value, self->min_quant_b_frames);
+      break;
+    case PROP_MAX_QUANT_I_FRAMES:
+      g_value_set_uint (value, self->max_quant_i_frames);
+      break;
+    case PROP_MAX_QUANT_P_FRAMES:
+      g_value_set_uint (value, self->max_quant_p_frames);
+      break;
+    case PROP_MAX_QUANT_B_FRAMES:
+      g_value_set_uint (value, self->max_quant_b_frames);
+      break;
+    case PROP_SHARE_BUFFER:
+      g_value_set_boolean(value, self->enc_share_frame_buffer);
       break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
@@ -1311,6 +1906,36 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       g_value_set_uint (value, self->look_ahead);
       break;
 #endif
+    case PROP_ROTATION:
+      g_value_set_uint (value, self->rotation);
+      break;
+    case PROP_MIRROR:
+      g_value_set_enum (value, self->mirror);
+      break;
+    case PROP_INTRA_REFRESH_MODE:
+      g_value_set_enum (value, self->intra_refresh_mode);
+      break;
+    case PROP_INTRA_REFRESH_MBS:
+      g_value_set_uint (value, self->intra_refresh_mbs);
+      break;
+    case PROP_DOWNSCALE_WIDTH:
+      g_value_set_uint(value,self->downscale_width);
+      break;
+    case PROP_DOWNSCALE_HEIGHT:
+      g_value_set_uint(value,self->downscale_height);
+      break;
+    case PROP_CROP_LEFT:
+      g_value_set_uint(value,self->crop_left);
+      break;
+    case PROP_CROP_TOP:
+      g_value_set_uint(value,self->crop_top);
+      break;
+    case PROP_CROP_WIDTH:
+      g_value_set_uint(value,self->crop_width);
+      break;
+    case PROP_CROP_HEIGHT:
+      g_value_set_uint(value,self->crop_height);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -2070,6 +2695,18 @@ gst_omx_video_enc_configure_input_buffer (GstOMXVideoEnc * self,
           ((port_def.format.video.nFrameHeight + 1) / 2));
       break;
 
+    case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m:
+      break;
+    case QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed:
+      port_def.nBufferSize = VENUS_BUFFER_SIZE(COLOR_FMT_NV12_UBWC,
+          port_def.format.video.nFrameWidth,
+          port_def.format.video.nFrameHeight);
+      break;
+    case QOMX_COLOR_Format32bitRGBA8888Compressed:
+      port_def.nBufferSize = VENUS_BUFFER_SIZE(COLOR_FMT_RGBA8888_UBWC,
+          port_def.format.video.nFrameWidth,
+          port_def.format.video.nFrameHeight);
+      break;
     default:
       GST_ERROR_OBJECT (self, "Unsupported port format %x",
           port_def.format.video.eColorFormat);
@@ -2105,6 +2742,8 @@ gst_omx_video_enc_ensure_nb_in_buffers (GstOMXVideoEnc * self)
 static gboolean
 gst_omx_video_enc_allocate_in_buffers (GstOMXVideoEnc * self)
 {
+  self->enc_in_port->enc_share_frame_buffer = self->enc_share_frame_buffer;
+
   switch (self->input_allocation) {
     case GST_OMX_BUFFER_ALLOCATION_ALLOCATE_BUFFER:
       if (gst_omx_port_allocate_buffers (self->enc_in_port) != OMX_ErrorNone)
@@ -2115,6 +2754,9 @@ gst_omx_video_enc_allocate_in_buffers (GstOMXVideoEnc * self)
         return FALSE;
       break;
     case GST_OMX_BUFFER_ALLOCATION_USE_BUFFER:
+      if(gst_omx_port_use_buffers(self->enc_in_port, NULL) != OMX_ErrorNone)
+        return FALSE;
+      break;
     default:
       /* Not supported */
       g_return_val_if_reached (FALSE);
@@ -2179,6 +2821,9 @@ static GstOMXBufferAllocation
 gst_omx_video_enc_pick_input_allocation_mode (GstOMXVideoEnc * self,
     GstBuffer * inbuf)
 {
+  if(self->enc_share_frame_buffer)
+    return GST_OMX_BUFFER_ALLOCATION_USE_BUFFER;
+
   if (!gst_omx_is_dynamic_allocation_supported ())
     return GST_OMX_BUFFER_ALLOCATION_ALLOCATE_BUFFER;
 
@@ -2483,6 +3128,7 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   GstVideoInfo *info = &state->info;
   GList *negotiation_map = NULL, *l;
   GstCaps *caps;
+  gboolean isubwc = FALSE ;
 
   self = GST_OMX_VIDEO_ENC (encoder);
   klass = GST_OMX_VIDEO_ENC_GET_CLASS (encoder);
@@ -2490,6 +3136,45 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   caps = gst_video_info_to_caps (info);
   GST_DEBUG_OBJECT (self, "Setting new input format: %" GST_PTR_FORMAT, caps);
   gst_caps_unref (caps);
+
+  if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+    && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+    if (self->crop_width >= info->width || self->crop_height >= info->height) {
+    GST_ERROR_OBJECT (self, "Error crop width/height, max width/height is %d/%d", info->width, info->height);
+    return FALSE;
+    }
+  }
+
+  // If framerate changed during Executing state set new framerate through
+  // OMX_SetConfig
+  if (gst_omx_component_get_state (self->enc,
+      GST_CLOCK_TIME_NONE) == OMX_StateExecuting && self->input_state) {
+    GstVideoCodecState *prevState = self->input_state;
+    GstVideoInfo *prevInfo = &prevState->info;
+
+    if (prevInfo->fps_n != info->fps_n ||
+            prevInfo->fps_d != info->fps_d) {
+      GST_DEBUG_OBJECT (self, "Frame rate changed from %u to %u",
+              prevInfo->fps_n, info->fps_n);
+      OMX_CONFIG_FRAMERATETYPE enc_framerate;
+      OMX_ERRORTYPE err;
+
+      gst_omx_video_enc_flush (encoder);
+
+      GST_OMX_INIT_STRUCT (&enc_framerate);
+      enc_framerate.nPortIndex = self->enc_out_port->index;
+      //TODO: previous code seems only consider integer fps, however, omx should support non-integer fps
+      g_warn_if_fail(info->fps_d == 1 && "Only consider integer fps!");
+      enc_framerate.xEncodeFramerate = (info->fps_n)*65536;//convert to Q16 format
+      err =
+         gst_omx_component_set_config (self->enc,
+         OMX_IndexConfigVideoFramerate, &enc_framerate);
+      GST_DEBUG_OBJECT (self, " Setting Video fps with err: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+
+      return TRUE;
+    }
+  }
 
   gst_omx_port_get_port_definition (self->enc_in_port, &port_def);
 
@@ -2513,6 +3198,22 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
     }
   }
 
+  if(self->enc_share_frame_buffer){
+    struct StoreMetaDataInBuffersParams sMetadataMode;
+    GST_OMX_INIT_STRUCT(&sMetadataMode);
+    sMetadataMode.nPortIndex = self->enc_in_port->index;
+    sMetadataMode.bStoreMetaData = OMX_TRUE;
+    GST_DEBUG_OBJECT (self, "set meta mode");
+    if (gst_omx_component_set_parameter(self->enc_in_port->comp,
+      (OMX_INDEXTYPE)OMX_QcomIndexParamVideoMetaBufferMode,
+      (OMX_PTR)&sMetadataMode) != OMX_ErrorNone){
+        GST_ERROR_OBJECT (self, "set meta mode fail");
+        return FALSE;
+    }
+    GST_DEBUG_OBJECT (self, "set meta mode succ");
+  }
+
+  self->isubwc = isubwc = gst_omx_caps_has_compression (state->caps, "ubwc");
   negotiation_map =
       gst_omx_video_get_supported_colorformats (self->enc_in_port,
       self->input_state);
@@ -2523,7 +3224,9 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
         port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV420Planar;
         break;
       case GST_VIDEO_FORMAT_NV12:
-        port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV420SemiPlanar;
+        port_def.format.video.eColorFormat = (isubwc) ?
+            QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed :
+            OMX_COLOR_FormatYUV420SemiPlanar;
         break;
       case GST_VIDEO_FORMAT_NV16:
         port_def.format.video.eColorFormat = OMX_COLOR_FormatYUV422SemiPlanar;
@@ -2543,6 +3246,19 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   } else {
     for (l = negotiation_map; l; l = l->next) {
       GstOMXVideoNegotiationMap *m = l->data;
+    /* Formats defined in extensions have their own enum so disable to -Wenum-compare warning */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wenum-compare"
+      if (isubwc && (m->type != QOMX_COLOR_Format32bitRGBA8888Compressed ) &&
+        (m->type != QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed )) {
+        // Not a supported video h/w flavoured UBWC format, skip.
+        continue;
+      } else if (!isubwc && (m->type != OMX_COLOR_Format32bitARGB8888 ) &&
+        (m->type != QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m )) {
+        // Not a supported video h/w flavoured format, skip.
+        continue;
+      }
+#pragma GCC diagnostic pop
 
       if (m->format == info->finfo->format) {
         port_def.format.video.eColorFormat = m->type;
@@ -2573,6 +3289,18 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
   if (gst_omx_port_update_port_definition (self->enc_in_port,
           &port_def) != OMX_ErrorNone)
     return FALSE;
+  /* update video width and height for omx core*/
+  {
+    OMX_PARAM_PORTDEFINITIONTYPE out_port_def;
+    gst_omx_port_get_port_definition (self->enc_out_port, &out_port_def);
+
+    out_port_def.format.video.nBitrate  = self->target_bitrate;
+    out_port_def.format.video.nFrameWidth = port_def.format.video.nFrameWidth;
+    out_port_def.format.video.nFrameHeight = port_def.format.video.nFrameHeight;
+    out_port_def.format.video.xFramerate = (port_def.format.video.xFramerate)*65536;//convert to Q16, seems port_def.format.video.xFramerate only consider integer fps
+    if (gst_omx_port_update_port_definition (self->enc_out_port, &out_port_def) != OMX_ErrorNone)
+      return FALSE;
+  }
 
 #ifdef USE_OMX_TARGET_RPI
   /* aspect ratio */
@@ -2629,7 +3357,9 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
 
   /* Some OMX implementations reset the bitrate after setting the compression
    * format, see bgo#698049, so re-set it */
-  gst_omx_video_enc_set_bitrate (self);
+  if (self->control_rate != 0xffffffff || self->target_bitrate != 0xffffffff) {
+    gst_omx_video_enc_set_bitrate (self);
+  }
 
   if (self->input_state)
     gst_video_codec_state_unref (self->input_state);
@@ -2638,6 +3368,24 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   gst_omx_video_enc_set_latency (self);
 #endif
+
+  if (self->rotation) {
+    OMX_CONFIG_ROTATIONTYPE framerotate;
+    GST_OMX_INIT_STRUCT (&framerotate);
+    if (self->enc) {
+      OMX_ERRORTYPE err;
+      framerotate.nPortIndex = self->enc_out_port->index;
+      framerotate.nRotation = (OMX_S32)self->rotation;
+      err = gst_omx_component_set_config(self->enc, OMX_IndexConfigCommonRotate, (OMX_PTR)&framerotate);
+      if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+            "Failed to set rotation parameter: %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+      } else {
+        GST_INFO_OBJECT(self, "set rotation:%d", self->rotation);
+      }
+    }
+  }
 
   self->downstream_flow_ret = GST_FLOW_OK;
   return TRUE;
@@ -2767,6 +3515,55 @@ gst_omx_video_enc_semi_planar_manual_copy (GstOMXVideoEnc * self,
 }
 
 static gboolean
+_process_input_crop_metadata (GstOMXVideoEnc * self, OMX_BUFFERHEADERTYPE *pOmxBuffer)
+{
+  GstVideoCodecState *state = gst_video_codec_state_ref (self->input_state);
+  GstVideoInfo *info = &state->info;
+  gboolean ret = TRUE;
+  int color_format = COLOR_FMT_NV12;
+  unsigned int y_stride, uv_stride, y_sclines, uv_sclines, y_plane, uv_plane;
+  unsigned int yuv_size = 0;
+  OMX_OTHER_EXTRADATATYPE *p_extra;
+  OMX_QCOM_EXTRADATA_FRAMEDIMENSION *framedimension_format;
+
+  if (self->crop_left == 0xffffffff || self->crop_top == 0xffffffff
+      || self->crop_width == 0xffffffff || self->crop_height == 0xffffffff)
+  {
+    return FALSE;
+  }
+
+  switch (info->finfo->format) {
+    case GST_VIDEO_FORMAT_NV12:
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12, info->width);
+      uv_stride = VENUS_UV_STRIDE(COLOR_FMT_NV12, info->width);
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12, info->height);
+      uv_sclines = VENUS_UV_SCANLINES(COLOR_FMT_NV12, info->height);
+      y_plane = y_stride * y_sclines;
+      uv_plane = uv_stride * uv_sclines;
+      yuv_size = ALIGN(y_plane + uv_plane, 4096);
+      GST_DEBUG_OBJECT (self, "yuv size:%d", yuv_size);
+      break;
+    default:
+      GST_ERROR_OBJECT (self, "Unsupported color format");
+      return FALSE;
+  }
+
+  p_extra = (OMX_OTHER_EXTRADATATYPE *) ((unsigned long long)(pOmxBuffer->pBuffer + yuv_size + 3)&(~3));
+  p_extra->eType = (OMX_EXTRADATATYPE) OMX_ExtraDataFrameDimension;
+  p_extra->nSize = sizeof(OMX_OTHER_EXTRADATATYPE) + sizeof(OMX_QCOM_EXTRADATA_FRAMEDIMENSION);
+  framedimension_format = (OMX_QCOM_EXTRADATA_FRAMEDIMENSION *)p_extra->data;
+  framedimension_format->nDecWidth = self->crop_left;
+  framedimension_format->nDecHeight = self->crop_top;
+  framedimension_format->nActualWidth = self->crop_width;
+  framedimension_format->nActualHeight = self->crop_height;
+
+  return ret;
+}
+
+#define SIG_OF_QVMETA(vmeta)  (unsigned int)((vmeta)->offset[2])
+#define FD_OF_QVMETA(vmeta)   (int)((vmeta)->stride[2])
+
+static gboolean
 gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     GstOMXBuffer * outbuf)
 {
@@ -2777,6 +3574,48 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
   GstVideoFrame frame;
   GstVideoMeta *meta = gst_buffer_get_video_meta (inbuf);
   gint stride = meta ? meta->stride[0] : info->stride[0];
+
+  GST_DEBUG_OBJECT (self, "self->enc_share_frame_buffer %d", self->enc_share_frame_buffer);
+  if(self->enc_share_frame_buffer) {
+    OMX_S32 nFds = 1;
+    OMX_S32 nInts = 3;
+    GstVideoMeta *QVMeta = gst_buffer_get_video_meta(inbuf);
+    gsize offset = 0;
+    gsize maxsize = 0;
+    gsize size = 0;
+    GST_DEBUG_OBJECT (self, "QVMeta %p", QVMeta);
+    MetaBuffer *pMetaBuffer = (MetaBuffer *)(outbuf->omx_buf->pBuffer);
+    NativeHandle* pMetaHandle = NULL;
+    if (!QVMeta || !pMetaBuffer) {
+      GST_ERROR_OBJECT (self, "QVMeta %p pMetaBuffer %p", QVMeta, pMetaBuffer);
+      return FALSE;
+    }
+    if (SIG_OF_QVMETA(QVMeta) != GST_MAKE_FOURCC('Q','a','U','T')) {
+      GST_ERROR_OBJECT (self, "Not found QaUT signature on input frame gstbuf %p GstVideoMeta %p, couldn't share frame buf", inbuf, QVMeta);
+      return FALSE;
+    }
+    pMetaHandle = pMetaBuffer->meta_handle;
+    if (!pMetaHandle) {
+      GST_ERROR_OBJECT (self, "pMetaHandle is NULL");
+      return FALSE;
+    }
+    g_warn_if_fail((outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed || outbuf->port->port_def.format.video.eColorFormat == OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m/*same as QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m*/) && "Enc share-buffer only support VPU nv12 and nv12_ubwc fmt!");
+    size = gst_buffer_get_sizes(inbuf, &offset, &maxsize);
+    pMetaHandle->version = sizeof(NativeHandle);
+    pMetaHandle->numFds = nFds;
+    pMetaHandle->numInts = nInts;
+    pMetaHandle->data[0] = FD_OF_QVMETA(QVMeta);
+    pMetaHandle->data[1] = 0; //offset
+    pMetaHandle->data[2] = maxsize > size ? maxsize: size;
+    pMetaHandle->data[3] = ITUR601; //TODO: will investigate this parameter's impact later
+    if (outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
+      pMetaHandle->data[3] |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+    }
+    pMetaBuffer->buffer_type = CameraSource;
+    GST_DEBUG_OBJECT (self, "fill meta buffer, buffer data fd %d, size %d, max size %d, data[2] %d\n", (int)(pMetaHandle->data[0]), size, maxsize, pMetaHandle->data[2]);
+    ret = TRUE;
+    goto done;
+  }
 
   if (info->width != port_def->format.video.nFrameWidth ||
       GST_VIDEO_INFO_FIELD_HEIGHT (info) !=
@@ -2914,6 +3753,59 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
       break;
     }
     case GST_VIDEO_FORMAT_NV12:
+    if (!self->isubwc) {
+      gint i, height, width;
+      guint8 *src, *dest;
+      gint src_stride;
+      gint lstride,lscanl, cstride;
+      outbuf->omx_buf->nFilledLen = 0;
+      if (!gst_video_frame_map (&frame, info, inbuf, GST_MAP_READ)) {
+        GST_ERROR_OBJECT (self, "Invalid input buffer size");
+        ret = FALSE;
+        break;
+      }
+      /* MSM8996: apply with the required MSM NV12 format */
+      src = GST_VIDEO_FRAME_COMP_DATA (&frame, 0);
+      width =  GST_VIDEO_FRAME_COMP_WIDTH (&frame, 0);
+      height =  GST_VIDEO_FRAME_COMP_HEIGHT (&frame, 0);
+      src_stride = GST_VIDEO_FRAME_COMP_STRIDE (&frame, 0);
+      lstride = VENUS_Y_STRIDE(COLOR_FMT_NV12, width);
+      lscanl = VENUS_Y_SCANLINES(COLOR_FMT_NV12, height);
+      cstride = VENUS_UV_STRIDE(COLOR_FMT_NV12, width);
+      dest = outbuf->omx_buf->pBuffer + outbuf->omx_buf->nOffset;
+      for (i = 0; i < height; i++) {
+         memcpy (dest, src, width);
+         src += src_stride;
+         dest += lstride;
+      }
+      GST_DEBUG_OBJECT (self,
+          "Copy NV12 with width,height,src_stride,lstride,lscanl,cstride =  %d %d %d %d %d %d",
+           width,height,src_stride,lstride,lscanl,cstride);
+      src = GST_VIDEO_FRAME_COMP_DATA (&frame, 1);
+      height = GST_VIDEO_FRAME_COMP_HEIGHT (&frame, 1);
+      src_stride = GST_VIDEO_FRAME_COMP_STRIDE (&frame, 1);
+      dest = outbuf->omx_buf->pBuffer + outbuf->omx_buf->nOffset
+         + lstride * lscanl ;
+      for (i = 0; i < height; i++) {
+          memcpy (dest, src, width);
+          src += src_stride;
+          dest += cstride;
+      }
+
+      outbuf->omx_buf->nFilledLen =
+         VENUS_BUFFER_SIZE(COLOR_FMT_NV12, width, GST_VIDEO_FRAME_COMP_HEIGHT (&frame, 0));
+      gst_video_frame_unmap (&frame);
+      ret = TRUE;
+      break;
+    } else {
+      outbuf->omx_buf->nFilledLen = gst_buffer_get_size (inbuf);
+
+      gst_buffer_extract (inbuf, 0,
+          outbuf->omx_buf->pBuffer + outbuf->omx_buf->nOffset,
+          outbuf->omx_buf->nFilledLen);
+      ret = TRUE;
+      break;
+    }
     case GST_VIDEO_FORMAT_NV16:
     case GST_VIDEO_FORMAT_NV12_10LE32:
     case GST_VIDEO_FORMAT_NV16_10LE32:
@@ -2937,6 +3829,11 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
       GST_ERROR_OBJECT (self, "Unsupported format");
       goto done;
       break;
+  }
+
+  if (self->crop_left != 0xffffffff && self->crop_top != 0xffffffff
+      && self->crop_width != 0xffffffff && self->crop_height != 0xffffffff) {
+    _process_input_crop_metadata(self, outbuf->omx_buf);
   }
 
 done:
@@ -3072,14 +3969,17 @@ gst_omx_video_enc_handle_frame (GstVideoEncoder * encoder,
           "Input buffer %p already has a OMX buffer associated: %p",
           frame->input_buffer, buf);
 
-      g_assert (!buf->input_buffer);
-      /* Prevent the buffer to be released to the pool while it's being
-       * processed by OMX. The reference will be dropped in EmptyBufferDone() */
-      buf->input_buffer = gst_buffer_ref (frame->input_buffer);
+      g_warn_if_fail(buf != NULL);
+      if (buf) {
+        g_assert (!buf->input_buffer);
+        /* Prevent the buffer to be released to the pool while it's being
+         * processed by OMX. The reference will be dropped in EmptyBufferDone() */
+        buf->input_buffer = gst_buffer_ref (frame->input_buffer);
 
-      acq_ret = GST_OMX_ACQUIRE_BUFFER_OK;
-      fill_buffer = FALSE;
-      buf->omx_buf->nFilledLen = gst_buffer_get_size (frame->input_buffer);
+        acq_ret = GST_OMX_ACQUIRE_BUFFER_OK;
+        fill_buffer = FALSE;
+        buf->omx_buf->nFilledLen = gst_buffer_get_size (frame->input_buffer);
+      }
     } else {
       acq_ret = gst_omx_port_acquire_buffer (port, &buf, GST_OMX_WAIT);
     }
@@ -3521,7 +4421,7 @@ gst_omx_video_enc_propose_allocation (GstVideoEncoder * encoder,
       "request at least %d buffers of size %d", num_buffers,
       (guint) self->enc_in_port->port_def.nBufferSize);
   gst_query_add_allocation_pool (query, pool,
-      self->enc_in_port->port_def.nBufferSize, num_buffers, 0);
+      GST_VIDEO_INFO_SIZE (&info), num_buffers, 0);
 
   self->in_pool_used = FALSE;
 
