@@ -27,6 +27,22 @@
 
 #include "gstomx.h"
 
+#ifdef NO_DEF_SPSPPSPAR
+#include "OMX_Types.h"
+typedef struct PrependSPSPPSToIDRFramesParams {
+  OMX_U32 nSize;
+  OMX_VERSIONTYPE nVersion;
+  OMX_BOOL bEnable;
+} PrependSPSPPSToIDRFramesParams;
+#endif
+
+typedef enum {
+  GST_VIDEO_BITRATE_SAVING_MODE_DISABLE,
+  GST_VIDEO_BITRATE_SAVING_MODE_8BIT,
+  GST_VIDEO_BITRATE_SAVING_MODE_10BIT,
+  GST_VIDEO_BITRATE_SAVING_MODE_ALL,
+} GstOMXVideoEncBitrateSavingMode;
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_OMX_VIDEO_ENC \
@@ -75,6 +91,16 @@ struct _GstOMXVideoEnc
   guint32 quant_i_frames;
   guint32 quant_p_frames;
   guint32 quant_b_frames;
+  guint32 init_quant_i_frames;
+  guint32 init_quant_p_frames;
+  guint32 init_quant_b_frames;
+  guint32 min_quant_i_frames;
+  guint32 min_quant_p_frames;
+  guint32 min_quant_b_frames;
+  guint32 max_quant_i_frames;
+  guint32 max_quant_p_frames;
+  guint32 max_quant_b_frames;
+  gboolean enc_share_frame_buffer;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   guint32 qp_mode;
   guint32 min_qp;
@@ -96,7 +122,18 @@ struct _GstOMXVideoEnc
   guint32 long_term_freq;
   guint32 look_ahead;
 #endif
+  GstOMXVideoEncBitrateSavingMode bitrate_saving_mode;
 
+  guint32 rotation;
+  guint32 mirror;
+  guint32 intra_refresh_mode;
+  guint32 intra_refresh_mbs;
+  guint32 downscale_width;
+  guint32 downscale_height;
+  guint32 crop_left;
+  guint32 crop_top;
+  guint32 crop_width;
+  guint32 crop_height;
   guint32 default_target_bitrate;
 
   GstFlowReturn downstream_flow_ret;
@@ -113,6 +150,7 @@ struct _GstOMXVideoEnc
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   GEnumClass *alg_roi_quality_enum_class;
 #endif
+  gboolean isubwc;
 };
 
 struct _GstOMXVideoEncClass

@@ -1,11 +1,17 @@
 option('header_path', type : 'string', value : '',
     description : 'An extra include directory to find the OpenMax headers')
+option('kernel_path', type : 'string', value : '',
+    description : 'An extra include directory to find the kernel headers')
+option('staging_inc_path', type : 'string', value : '',
+    description : 'An extra include directory to find the headers')
 option('target', type : 'combo',
-    choices : ['none', 'generic', 'rpi', 'bellagio', 'tizonia', 'zynqultrascaleplus'], value : 'none',
+    choices : ['none', 'generic', 'rpi', 'bellagio', 'tizonia', 'zynqultrascaleplus', 'qti'], value : 'none',
     description : 'The OMX platform to target')
 option('struct_packing', type : 'combo',
     choices : ['0', '1', '2', '4', '8'], value : '0',
     description : 'Force OpenMAX struct packing')
+option('enable-target-6155', type : 'string', value : '',
+    description : 'enable target 6155 with vpu443')
 
 # Common feature options
 option('examples', type : 'feature', value : 'auto', yield : true)
