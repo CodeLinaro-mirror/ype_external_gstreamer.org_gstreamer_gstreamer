@@ -108,6 +108,11 @@ GstFlowReturn gst_omx_allocator_acquire (GstOMXAllocator * allocator,
 
 GstMemory * gst_omx_allocator_allocate (GstOMXAllocator * allocator, gint index,
     GstMemory * foreign_mem);
+GstOMXMemory *
+gst_omx_memory_new (GstOMXAllocator * allocator, GstOMXBuffer * omx_buf,
+    GstMemoryFlags flags, GstMemory * parent, gssize offset, gssize size);
+void
+install_mem_dispose (GstOMXMemory * mem);
 
 G_END_DECLS
 

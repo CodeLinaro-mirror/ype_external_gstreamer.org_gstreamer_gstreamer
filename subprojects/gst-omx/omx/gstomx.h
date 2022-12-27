@@ -27,6 +27,7 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <string.h>
+#include "media/hardware/MetadataBufferType.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -95,7 +96,10 @@
 #endif
 
 G_BEGIN_DECLS
+#define _OMX_ZERO_MEMCOPY_RENDERING_
+#define _QTI_DMABUFFER_MODE_
 
+#if 0 /* Original Code is commented */
 #define GST_OMX_INIT_STRUCT(st) G_STMT_START { \
   memset ((st), 0, sizeof (*(st))); \
   (st)->nSize = sizeof (*(st)); \
@@ -104,6 +108,18 @@ G_BEGIN_DECLS
   (st)->nVersion.s.nRevision = OMX_VERSION_REVISION; \
   (st)->nVersion.s.nStep = OMX_VERSION_STEP; \
 } G_STMT_END
+
+#else
+/* Support for MSM 8996:
+ * Version updated to 0x00000101 as required by MSM-OMX;
+ * Otherwise, it will be 0x00020101, which isn't coherent with MSM-OMX
+ */
+#define GST_OMX_INIT_STRUCT(st) G_STMT_START { \
+  memset ((st), 0, sizeof (*(st))); \
+  (st)->nSize = sizeof (*(st)); \
+  (st)->nVersion.nVersion = ((OMX_U32)0x00000101);\
+} G_STMT_END
+#endif
 
 #ifdef OMX_SKIP64BIT
 #define GST_OMX_GET_TICKS(ticks) ((((guint64) (ticks).nHighPart) << 32) | ((ticks).nLowPart))
@@ -215,6 +231,30 @@ typedef struct _GstOMXBuffer GstOMXBuffer;
 typedef struct _GstOMXClassData GstOMXClassData;
 typedef struct _GstOMXMessage GstOMXMessage;
 
+/* copy the defines of _MetaBufferType, ITUR601, _NativeHandle and _MetaBuffer
+ * from mm-video-utils
+ */
+typedef enum _MetaBufferType {
+#ifdef USE_NATIVE_HANDLE_SOURCE
+    CameraSource = 3,
+#else
+    CameraSource = 0,
+#endif
+    GrallocSource = 1,
+}MetaBufferType;
+
+#define ITUR601 0x200000
+typedef struct _NativeHandle {
+    OMX_S32 version;        /* sizeof(native_handle_t) */
+    OMX_S32 numFds;         /* number of file-descriptors at &data[0] */
+    OMX_S32 numInts;        /* number of ints at &data[numFds] */
+    OMX_S32 data[0];        /* numFds + numInts ints */
+}NativeHandle;
+typedef struct _MetaBuffer {
+    MetaBufferType buffer_type;
+    NativeHandle* meta_handle;
+}MetaBuffer;
+
 typedef enum {
   /* Everything good and the buffer is valid */
   GST_OMX_ACQUIRE_BUFFER_OK = 0,
@@ -228,6 +268,7 @@ typedef enum {
   GST_OMX_ACQUIRE_BUFFER_ERROR,
   /* No buffer is currently available (used when calling gst_omx_port_acquire_buffer() in not waiting mode) */
   GST_OMX_ACQUIRE_BUFFER_NO_AVAILABLE,
+  GST_OMX_ACQUIRE_BUFFER_RECT_CHANGED
 } GstOMXAcquireBufferReturn;
 
 struct _GstOMXCore {
@@ -256,6 +297,7 @@ typedef enum {
   GST_OMX_MESSAGE_PORT_SETTINGS_CHANGED,
   GST_OMX_MESSAGE_BUFFER_FLAG,
   GST_OMX_MESSAGE_BUFFER_DONE,
+  GST_OMX_MESSAGE_PORT_RECT_CHANGED
 } GstOMXMessageType;
 
 typedef enum {
@@ -332,6 +374,10 @@ struct _GstOMXPort {
    */
   gint settings_cookie;
   gint configured_settings_cookie;
+
+  guint pending_bufs_before_rect_change;
+  gboolean rect_changed;
+  gboolean enc_share_frame_buffer;
 };
 
 struct _GstOMXComponent {
@@ -408,6 +454,8 @@ struct _GstOMXClassData {
 
   GstOmxComponentType type;
 };
+
+gboolean          gst_omx_caps_has_compression (const GstCaps * caps, const gchar * compression);
 
 GKeyFile *        gst_omx_get_configuration (void);
 

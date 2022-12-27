@@ -31,6 +31,11 @@ extra_c_args = []
 
 if have_omx_vp8
   omx_sources += 'gstomxvp8dec.c'
+  omx_sources += 'gstomxvp8enc.c'
+endif
+
+if have_omx_vp9
+  omx_sources += 'gstomxvp9dec.c'
 endif
 
 if have_omx_theora
@@ -48,6 +53,7 @@ if gstgl_dep.found()
   optional_deps += gstgl_dep
   extra_c_args += ['-DGST_USE_UNSTABLE_API']
 endif
+optional_deps += omx_vendor_dep
 
 gstomx = library('gstomx',
   omx_sources,

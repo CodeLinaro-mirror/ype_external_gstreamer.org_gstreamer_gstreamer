@@ -26,6 +26,7 @@
 
 #include "gstomxh264enc.h"
 #include "gstomxh264utils.h"
+#include "OMX_QCOMExtns.h"
 
 #ifdef USE_OMX_TARGET_RPI
 #include <OMX_Broadcom.h>
@@ -52,9 +53,7 @@ static void gst_omx_h264_enc_get_property (GObject * object, guint prop_id,
 enum
 {
   PROP_0,
-#ifdef USE_OMX_TARGET_RPI
   PROP_INLINESPSPPSHEADERS,
-#endif
   PROP_PERIODICITYOFIDRFRAMES,
   PROP_PERIODICITYOFIDRFRAMES_COMPAT,
   PROP_INTERVALOFCODINGINTRAFRAMES,
@@ -62,14 +61,16 @@ enum
   PROP_ENTROPY_MODE,
   PROP_CONSTRAINED_INTRA_PREDICTION,
   PROP_LOOP_FILTER_MODE,
-  PROP_REF_FRAMES
+  PROP_REF_FRAMES,
+  PROP_MULTISLICE_MODE,
+  PROP_MULTISLICE_VALUE,
+  PROP_MULTSLICEINFO_EXTRADATA
 };
 
-#ifdef USE_OMX_TARGET_RPI
 #define GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT      TRUE
-#endif
-#define GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT    (0xffffffff)
-#define GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT    4
+#define GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT 25
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
 #define GST_OMX_H264_VIDEO_ENC_B_FRAMES_DEFAULT (0)
 #define ALIGNMENT "{ au, nal }"
@@ -83,6 +84,28 @@ enum
 #define GST_OMX_H264_VIDEO_ENC_REF_FRAMES_DEFAULT 0
 #define GST_OMX_H264_VIDEO_ENC_REF_FRAMES_MIN 0
 #define GST_OMX_H264_VIDEO_ENC_REF_FRAMES_MAX 16
+#define GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_MODE_DEFAULT GST_OMX_H264_ENC_SLICE_MODE_DISABLE
+#define GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_VALUE_DEFAULT 2048
+#define GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_INFO_EXTRADATA_DEFAULT  FALSE
+
+#define GST_OMX_H264_ENC_SLICE_MODE_TYPE (gst_omx_h264_enc_slice_mode_get_type())
+static GType
+gst_omx_h264_enc_slice_mode_get_type(void)
+{
+  static const GEnumValue multislice_mode_types[] = {
+    {GST_OMX_H264_ENC_SLICE_MODE_DISABLE, "disable multi-slice", "disable"},
+    {GST_OMX_H264_ENC_SLICE_MODE_MB, "multi-slice based on macro blocks", "mb"},
+    {GST_OMX_H264_ENC_SLICE_MODE_BITS, "multi-slice based on slice size in byte", "bits"},
+    {0, NULL, NULL},
+  };
+
+  static gsize mode = 0;
+  if ( g_once_init_enter( &mode ) ) {
+    GType _mode = g_enum_register_static ("GstOMXH264EncSliceModes", multislice_mode_types);
+    g_once_init_leave( &mode, _mode);
+  }
+  return (GType) mode;
+}
 
 /* class initialization */
 
@@ -149,7 +172,6 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
   gobject_class->set_property = gst_omx_h264_enc_set_property;
   gobject_class->get_property = gst_omx_h264_enc_get_property;
 
-#ifdef USE_OMX_TARGET_RPI
   g_object_class_install_property (gobject_class, PROP_INLINESPSPPSHEADERS,
       g_param_spec_boolean ("inline-header",
           "Inline SPS/PPS headers before IDR",
@@ -157,7 +179,14 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
           GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
-#endif
+
+  g_object_class_install_property (gobject_class, PROP_MULTSLICEINFO_EXTRADATA,
+      g_param_spec_boolean ("multisliceinfo-extradata-enable",
+          "multisliceinfo-extradata-enable",
+          "Multislice info extradata enable",
+          GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_INFO_EXTRADATA_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   g_object_class_install_property (gobject_class, PROP_PERIODICITYOFIDRFRAMES,
       g_param_spec_uint ("periodicity-idr", "IDR periodicity",
@@ -170,7 +199,7 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
   g_object_class_install_property (gobject_class,
       PROP_PERIODICITYOFIDRFRAMES_COMPAT, g_param_spec_uint ("periodicty-idr",
           "IDR periodicity",
-          "Periodicity of IDR frames (0xffffffff=component default) DEPRECATED - only for backwards compat",
+          "Periodicity of IDR frames DEPRECATED - only for backwards compat",
           0, G_MAXUINT,
           GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
@@ -180,7 +209,7 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
       PROP_INTERVALOFCODINGINTRAFRAMES,
       g_param_spec_uint ("interval-intraframes",
           "Interval of coding Intra frames",
-          "Interval of coding Intra frames (0xffffffff=component default)", 0,
+          "Interval of coding Intra frames", 0,
           G_MAXUINT,
           GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
@@ -228,6 +257,26 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class,
+      PROP_MULTISLICE_MODE,
+      g_param_spec_enum ("multislice-mode",
+          "Multi slice mode",
+          "Multi slice mode",
+          GST_OMX_H264_ENC_SLICE_MODE_TYPE,
+          GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class,
+      PROP_MULTISLICE_VALUE,
+      g_param_spec_uint ("multislice-value",
+          "Multi slice value based on multi-slice mode",
+          "Multi slice value based on multi-slice mode", 0,
+          G_MAXUINT,
+          GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_VALUE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   basevideoenc_class->flush = gst_omx_h264_enc_flush;
   basevideoenc_class->stop = gst_omx_h264_enc_stop;
 
@@ -254,11 +303,9 @@ gst_omx_h264_enc_set_property (GObject * object, guint prop_id,
   GstOMXH264Enc *self = GST_OMX_H264_ENC (object);
 
   switch (prop_id) {
-#ifdef USE_OMX_TARGET_RPI
     case PROP_INLINESPSPPSHEADERS:
       self->inline_sps_pps_headers = g_value_get_boolean (value);
       break;
-#endif
     case PROP_PERIODICITYOFIDRFRAMES:
     case PROP_PERIODICITYOFIDRFRAMES_COMPAT:
       self->periodicty_idr = g_value_get_uint (value);
@@ -281,6 +328,15 @@ gst_omx_h264_enc_set_property (GObject * object, guint prop_id,
     case PROP_REF_FRAMES:
       self->ref_frames = g_value_get_uchar (value);
       break;
+    case PROP_MULTISLICE_MODE:
+      self->multislice_mode = (GstOMXH264EncSliceMode)g_value_get_enum (value);
+      break;
+    case PROP_MULTISLICE_VALUE:
+      self->multislice_value = g_value_get_uint (value);
+      break;
+    case PROP_MULTSLICEINFO_EXTRADATA:
+      self->multisliceinfo_extradata_enable = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -294,11 +350,9 @@ gst_omx_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
   GstOMXH264Enc *self = GST_OMX_H264_ENC (object);
 
   switch (prop_id) {
-#ifdef USE_OMX_TARGET_RPI
     case PROP_INLINESPSPPSHEADERS:
       g_value_set_boolean (value, self->inline_sps_pps_headers);
       break;
-#endif
     case PROP_PERIODICITYOFIDRFRAMES:
     case PROP_PERIODICITYOFIDRFRAMES_COMPAT:
       g_value_set_uint (value, self->periodicty_idr);
@@ -321,6 +375,15 @@ gst_omx_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_REF_FRAMES:
       g_value_set_uchar (value, self->ref_frames);
       break;
+    case PROP_MULTISLICE_MODE:
+      g_value_set_enum (value, self->multislice_mode);
+      break;
+    case PROP_MULTISLICE_VALUE:
+      g_value_set_uint (value, self->multislice_value);
+      break;
+    case PROP_MULTSLICEINFO_EXTRADATA:
+      g_value_set_boolean (value, self->multisliceinfo_extradata_enable);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -330,10 +393,8 @@ gst_omx_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
 static void
 gst_omx_h264_enc_init (GstOMXH264Enc * self)
 {
-#ifdef USE_OMX_TARGET_RPI
   self->inline_sps_pps_headers =
       GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT;
-#endif
   self->periodicty_idr =
       GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT;
   self->interval_intraframes =
@@ -344,6 +405,13 @@ gst_omx_h264_enc_init (GstOMXH264Enc * self)
       GST_OMX_H264_VIDEO_ENC_CONSTRAINED_INTRA_PREDICTION_DEFAULT;
   self->loop_filter_mode = GST_OMX_H264_VIDEO_ENC_LOOP_FILTER_MODE_DEFAULT;
   self->ref_frames = GST_OMX_H264_VIDEO_ENC_REF_FRAMES_DEFAULT;
+  self->multislice_mode =
+    GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_MODE_DEFAULT;
+  self->multislice_value =
+    GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_VALUE_DEFAULT;
+  self->multisliceinfo_extradata_enable =
+    GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_INFO_EXTRADATA_DEFAULT;
+
 }
 
 static gboolean
@@ -422,6 +490,7 @@ update_param_avc (GstOMXH264Enc * self,
 {
   OMX_VIDEO_PARAM_AVCTYPE param;
   OMX_ERRORTYPE err;
+  OMX_VIDEO_PARAM_ERRORCORRECTIONTYPE error_corr;
 
   GST_OMX_INIT_STRUCT (&param);
   param.nPortIndex = GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
@@ -503,6 +572,76 @@ update_param_avc (GstOMXH264Enc * self,
         gst_omx_error_to_string (err), err);
     return FALSE;
   }
+  /* multi-slice configuration */
+  if (GST_OMX_H264_ENC_SLICE_MODE_BITS == self->multislice_mode) {
+    GST_OMX_INIT_STRUCT (&error_corr);
+    error_corr.nPortIndex = GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
+    err =
+        gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+        OMX_IndexParamVideoErrorCorrection, &error_corr);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+        "Failed to get VideoErrorCorrection param setting, %s (0x%08x)",
+        gst_omx_error_to_string (err), err);
+      return FALSE;
+    }
+
+    error_corr.nResynchMarkerSpacing = self->multislice_value << 3;
+    error_corr.bEnableResync = (error_corr.nResynchMarkerSpacing > 0) ? OMX_TRUE : OMX_FALSE;
+
+    err = gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+          OMX_IndexParamVideoErrorCorrection, &error_corr);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+            "Failed to set VideoErrorCorrection param setting, %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+      return FALSE;
+    }
+
+    if ((GST_OMX_H264_ENC_SLICE_MODE_DISABLE != self->multislice_mode) && self->multisliceinfo_extradata_enable)
+    {
+       QOMX_INDEXEXTRADATATYPE extra_data;
+       GST_OMX_INIT_STRUCT(&extra_data);
+       extra_data.nPortIndex = GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
+       extra_data.nIndex = (OMX_INDEXTYPE)OMX_ExtraDataVideoEncoderSliceInfo;
+       extra_data.bEnabled = OMX_TRUE;
+       err = gst_omx_component_set_parameter(GST_OMX_VIDEO_ENC (self)->enc,
+                          OMX_QcomIndexParamIndexExtraDataType,
+                          &extra_data);
+       if (err != OMX_ErrorNone)
+       {
+          GST_ERROR_OBJECT (self,
+               "Failed to set OMX_QcomIndexParamIndexExtraDataType param setting, %s (0x%08x)",
+               gst_omx_error_to_string (err), err);
+          return FALSE;
+       }
+       GST_DEBUG_OBJECT (self, "OMX_ExtraDataVideoEncoderSliceInfo enabled" );
+    }
+  }else{
+    GST_OMX_INIT_STRUCT (&param);
+    err = gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+        OMX_IndexParamVideoAvc, &param);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+          "can't get OMX_IndexParamVideoAvc %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+      return FALSE;
+    }
+
+    param.nSliceHeaderSpacing = (GST_OMX_H264_ENC_SLICE_MODE_MB == self->multislice_mode) ?
+       self->multislice_value : 0;
+
+    err =
+        gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+              OMX_IndexParamVideoAvc, &param);
+
+    if (err != OMX_ErrorNone) {
+       GST_ERROR_OBJECT (self,
+            "Failed to set OMX_IndexParamVideoAvc param setting, %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+      return FALSE;
+    }
+  }
 
   return TRUE;
 }
@@ -517,7 +656,7 @@ set_avc_intra_period (GstOMXH264Enc * self)
   config_avcintraperiod.nPortIndex =
       GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
   err =
-      gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+      gst_omx_component_get_config (GST_OMX_VIDEO_ENC (self)->enc,
       OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod);
   if (err == OMX_ErrorUnsupportedIndex) {
     GST_WARNING_OBJECT (self,
@@ -534,23 +673,17 @@ set_avc_intra_period (GstOMXH264Enc * self)
       (guint) config_avcintraperiod.nPFrames,
       (guint) config_avcintraperiod.nIDRPeriod);
 
-  if (self->periodicty_idr !=
-      GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT) {
-    config_avcintraperiod.nIDRPeriod = self->periodicty_idr;
-  }
+  config_avcintraperiod.nIDRPeriod = self->periodicty_idr;
 
-  if (self->interval_intraframes !=
-      GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT) {
     /* This OMX API doesn't allow us to specify the number of B-frames.
      * So if user requested one we have to rely on update_param_avc()
      * to configure the intraframes interval so it can take the
      * B-frames into account. */
-    if (self->b_frames == GST_OMX_H264_VIDEO_ENC_B_FRAMES_DEFAULT)
-      config_avcintraperiod.nPFrames = self->interval_intraframes;
-  }
+  if (self->b_frames == GST_OMX_H264_VIDEO_ENC_B_FRAMES_DEFAULT)
+    config_avcintraperiod.nPFrames = self->interval_intraframes;
 
   err =
-      gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+      gst_omx_component_set_config (GST_OMX_VIDEO_ENC (self)->enc,
       OMX_IndexConfigVideoAVCIntraPeriod, &config_avcintraperiod);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
@@ -615,53 +748,42 @@ gst_omx_h264_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
   GstOMXH264Enc *self = GST_OMX_H264_ENC (enc);
   GstCaps *peercaps;
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
-#ifdef USE_OMX_TARGET_RPI
-  OMX_CONFIG_PORTBOOLEANTYPE config_inline_header;
-#endif
+  PrependSPSPPSToIDRFramesParams config_inline_header;
   OMX_ERRORTYPE err;
   const gchar *profile_string, *level_string;
   OMX_VIDEO_AVCPROFILETYPE profile = OMX_VIDEO_AVCProfileMax;
   OMX_VIDEO_AVCLEVELTYPE level = OMX_VIDEO_AVCLevelMax;
   gboolean enable_subframe = FALSE;
 
-#ifdef USE_OMX_TARGET_RPI
   GST_OMX_INIT_STRUCT (&config_inline_header);
-  config_inline_header.nPortIndex =
-      GST_OMX_VIDEO_ENC (self)->enc_out_port->index;
-  err =
-      gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
-      OMX_IndexParamBrcmVideoAVCInlineHeaderEnable, &config_inline_header);
+  err =gst_omx_component_get_parameter (GST_OMX_VIDEO_ENC (self)->enc,
+      OMX_QcomIndexParamSequenceHeaderWithIDR, &config_inline_header);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
-        "can't get OMX_IndexParamBrcmVideoAVCInlineHeaderEnable %s (0x%08x)",
+        "can't get OMX_QcomIndexParamSequenceHeaderWithIDR %s (0x%08x)",
         gst_omx_error_to_string (err), err);
     return FALSE;
   }
 
   if (self->inline_sps_pps_headers) {
-    config_inline_header.bEnabled = OMX_TRUE;
+    config_inline_header.bEnable = OMX_TRUE;
   } else {
-    config_inline_header.bEnabled = OMX_FALSE;
+    config_inline_header.bEnable = OMX_FALSE;
   }
 
   err =
       gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
-      OMX_IndexParamBrcmVideoAVCInlineHeaderEnable, &config_inline_header);
+      OMX_QcomIndexParamSequenceHeaderWithIDR, &config_inline_header);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
-        "can't set OMX_IndexParamBrcmVideoAVCInlineHeaderEnable %s (0x%08x)",
+        "can't set OMX_QcomIndexParamSequenceHeaderWithIDR %s (0x%08x)",
         gst_omx_error_to_string (err), err);
     return FALSE;
   }
-#endif
 
   /* Configure GOP pattern */
-  if (self->periodicty_idr !=
-      GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT
-      || self->interval_intraframes !=
-      GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT) {
-    set_avc_intra_period (self);
-  }
+  set_avc_intra_period (self);
+
 #ifdef USE_OMX_TARGET_RPI
   /* The Pi uses a specific OMX setting to configure the intra period */
 

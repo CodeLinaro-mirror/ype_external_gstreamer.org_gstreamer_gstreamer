@@ -36,6 +36,7 @@
 #include "gstomxh263dec.h"
 #include "gstomxh265dec.h"
 #include "gstomxvp8dec.h"
+#include "gstomxvp8enc.h"
 #include "gstomxtheoradec.h"
 #include "gstomxwmvdec.h"
 #include "gstomxmpeg4videoenc.h"
@@ -49,6 +50,8 @@
 #include "gstomxamrdec.h"
 #include "gstomxanalogaudiosink.h"
 #include "gstomxhdmiaudiosink.h"
+#include "gstomxvp9dec.h"
+#include "OMX_QCOMExtns.h"
 
 GST_DEBUG_CATEGORY (gstomx_debug);
 #define GST_CAT_DEFAULT gstomx_debug
@@ -69,6 +72,19 @@ static GHashTable *core_handles;
 /* Cache used by gst_omx_buffer_flags_to_string() */
 G_LOCK_DEFINE_STATIC (buffer_flags_str);
 static GHashTable *buffer_flags_str;
+
+gboolean
+gst_omx_caps_has_compression (const GstCaps * caps, const gchar * compression)
+{
+  GstStructure *structure = NULL;
+  const gchar *string = NULL;
+
+  structure = gst_caps_get_structure (caps, 0);
+  string = gst_structure_has_field (structure, "compression") ?
+      gst_structure_get_string (structure, "compression") : NULL;
+
+  return (g_strcmp0 (string, compression) == 0) ? TRUE : FALSE;
+}
 
 GstOMXCore *
 gst_omx_core_acquire (const gchar * filename)
@@ -383,6 +399,29 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
           port->eos = TRUE;
         }
 
+        break;
+      }
+      case GST_OMX_MESSAGE_PORT_RECT_CHANGED:{
+        OMX_U32 index = msg->content.port_settings_changed.port;
+        GstOMXPort *port = NULL;
+
+        GST_DEBUG_OBJECT (comp->parent, "%s rectangle crop changed (port %u)",
+            comp->name, index);
+
+        port = gst_omx_component_get_port (comp, index);
+        if (!port)
+          break;
+
+        if (port->port_def.eDir != OMX_DirOutput) {
+          GST_WARNING_OBJECT (comp->parent,
+              "rect crop should happened on out port");
+          break;
+        }
+        port->pending_bufs_before_rect_change =
+          g_queue_get_length (&port->pending_buffers);
+        port->rect_changed = TRUE;
+        GST_DEBUG_OBJECT (comp->parent, "%s pending rect change buffers %u",
+            comp->name, port->pending_bufs_before_rect_change);
         break;
       }
       case GST_OMX_MESSAGE_BUFFER_DONE:{
@@ -744,11 +783,23 @@ EventHandler (OMX_HANDLETYPE hComponent, OMX_PTR pAppData, OMX_EVENTTYPE eEvent,
               GST_OMX_HACK_EVENT_PORT_SETTINGS_CHANGED_PORT_0_TO_1))
         index = 1;
 
-
-      msg->type = GST_OMX_MESSAGE_PORT_SETTINGS_CHANGED;
-      msg->content.port_settings_changed.port = index;
-      GST_DEBUG_OBJECT (comp->parent, "%s settings changed (port index: %u)",
+      if (nData2 == OMX_IndexParamPortDefinition)
+      {
+        msg->type = GST_OMX_MESSAGE_PORT_SETTINGS_CHANGED;
+        msg->content.port_settings_changed.port = index;
+        GST_DEBUG_OBJECT (comp->parent, "%s settings changed (port index: %u)",
           comp->name, (guint) msg->content.port_settings_changed.port);
+      }
+      else if (nData2 == OMX_IndexConfigCommonOutputCrop){
+        msg->type = GST_OMX_MESSAGE_PORT_RECT_CHANGED;
+        msg->content.port_settings_changed.port = index;
+        GST_DEBUG_OBJECT (comp->parent, "%s rectangle changed (port index: %u)",
+          comp->name, (guint) msg->content.port_settings_changed.port);
+      } else {
+        GST_WARNING_OBJECT (comp->parent, "Never handle event:0x%x param:%d", msg->type, nData2);
+        g_slice_free (GstOMXMessage, msg);
+        break;
+      }
 
       gst_omx_component_send_message (comp, msg);
       break;
@@ -1039,7 +1090,9 @@ gst_omx_component_free (GstOMXComponent * comp)
       g_assert (port->buffers == NULL);
       g_assert (g_queue_get_length (&port->pending_buffers) == 0);
 
+      g_mutex_lock (&comp->lock);
       g_slice_free (GstOMXPort, port);
+      g_mutex_unlock (&comp->lock);
     }
     g_ptr_array_unref (comp->ports);
     comp->ports = NULL;
@@ -1692,6 +1745,8 @@ omx_index_type_to_str (OMX_INDEXTYPE index)
       return "OMX_IndexConfigTimeSeekMode";
     case OMX_IndexKhronosExtensions:
       return "OMX_IndexKhronosExtensions";
+    case OMX_QTIIndexConfigContentAdaptiveCoding:
+      return "OMX_QTIIndexConfigContentAdaptiveCoding";
     case OMX_IndexVendorStartUnused:
       return "OMX_IndexVendorStartUnused";
     case OMX_IndexMax:
@@ -2208,8 +2263,22 @@ retry:
       GST_DEBUG_OBJECT (comp->parent,
           "%s output port %u needs reconfiguration but has buffers pending",
           comp->name, port->index);
+      /* When the reconfiguration happened, need to return GST_OMX_ACQUIRE_BUFFER_RECONFIGURE
+       * as soon as possible, especially when the filled length of pending buffer is
+       * zero. Because the OMX il will return the output buffer in the state of reconfiguration.
+       * It makes the output buffer been pushed back and forth between the gstomx and OMX il,
+       * which makes the reconfiguration too later.
+       */
+      _buf = g_queue_peek_head (&port->pending_buffers);
+      if (_buf && _buf->omx_buf && _buf->omx_buf->nFilledLen == 0) {
+        GST_LOG_OBJECT (comp->parent, "let pending buffer stay in queue of pending buffer");
+        ret = GST_OMX_ACQUIRE_BUFFER_RECONFIGURE;
+        goto done;
+      }
       _buf = g_queue_pop_head (&port->pending_buffers);
 
+      if (port->pending_bufs_before_rect_change > 0)
+        port->pending_bufs_before_rect_change--;
       ret = GST_OMX_ACQUIRE_BUFFER_OK;
       goto done;
     }
@@ -2220,6 +2289,22 @@ retry:
     goto done;
   }
 
+  if (port->port_def.eDir == OMX_DirOutput &&
+      port->rect_changed == TRUE) {
+    if (port->pending_bufs_before_rect_change > 0) {
+      GST_DEBUG_OBJECT (comp->parent, "%s output port %u has rect change"
+          "pending buffer", comp->name, port->index);
+      _buf = g_queue_pop_head (&port->pending_buffers);
+
+      port->pending_bufs_before_rect_change--;
+      ret = GST_OMX_ACQUIRE_BUFFER_OK;
+      goto done;
+    }
+    port->rect_changed = FALSE;
+    ret = GST_OMX_ACQUIRE_BUFFER_RECT_CHANGED;
+    goto done;
+  }
+
   if (port->port_def.eDir == OMX_DirOutput && port->eos) {
     if (!g_queue_is_empty (&port->pending_buffers)) {
       GST_DEBUG_OBJECT (comp->parent, "%s output port %u is EOS but has "
@@ -2227,6 +2312,8 @@ retry:
           g_queue_get_length (&port->pending_buffers));
       _buf = g_queue_pop_head (&port->pending_buffers);
 
+      if (port->pending_bufs_before_rect_change > 0)
+        port->pending_bufs_before_rect_change--;
       ret = GST_OMX_ACQUIRE_BUFFER_OK;
       goto done;
     }
@@ -2265,9 +2352,6 @@ retry:
 
       /* And now check everything again and maybe get a buffer */
       goto retry;
-    } else {
-      ret = GST_OMX_ACQUIRE_BUFFER_NO_AVAILABLE;
-      goto done;
     }
   }
 
@@ -2596,9 +2680,26 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
           l->data);
       buf->eglimage = TRUE;
     } else {
-      err =
-          OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
-          port->port_def.nBufferSize);
+      if(port->enc_share_frame_buffer){
+        err = OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
+            sizeof(MetaBuffer));
+        if (err == OMX_ErrorNone && buf->omx_buf) {
+          OMX_S32 nFds = 1;
+          OMX_S32 nInts = 3;
+          MetaBuffer *pMetaBuffer = (MetaBuffer *)(buf->omx_buf->pBuffer);
+          if (pMetaBuffer) {
+            NativeHandle* pMetaHandle = (NativeHandle*)calloc((
+            sizeof(NativeHandle)+ sizeof(OMX_S32)*(nFds + nInts)), 1);
+            pMetaBuffer->meta_handle = pMetaHandle;
+            pMetaBuffer->buffer_type = CameraSource;
+          }
+        }
+        GST_DEBUG_OBJECT (comp->parent, "alloc metabuffer");
+      } else {
+        err =
+            OMX_AllocateBuffer (comp->handle, &buf->omx_buf, port->index, buf,
+            port->port_def.nBufferSize);
+      }
       buf->eglimage = FALSE;
     }
 
@@ -2663,8 +2764,14 @@ gst_omx_port_use_buffers (GstOMXPort * port, const GList * buffers)
   g_return_val_if_fail (port != NULL, OMX_ErrorUndefined);
 
   g_mutex_lock (&port->comp->lock);
-  n = g_list_length ((GList *) buffers);
-  err = gst_omx_port_allocate_buffers_unlocked (port, buffers, NULL, n);
+  if(NULL == buffers) {
+    err = gst_omx_port_allocate_buffers_unlocked (port, NULL, NULL, -1);
+  }
+  else {
+    n = g_list_length ((GList *) buffers);
+    err = gst_omx_port_allocate_buffers_unlocked (port, buffers, NULL, n);
+  }
+
   port->allocation = GST_OMX_BUFFER_ALLOCATION_USE_BUFFER;
   g_mutex_unlock (&port->comp->lock);
 
@@ -2892,6 +2999,11 @@ gst_omx_port_deallocate_buffers_unlocked (GstOMXPort * port)
       buf->omx_buf->pAppPrivate = NULL;
       GST_DEBUG_OBJECT (comp->parent, "%s: deallocating buffer %p (%p)",
           comp->name, buf, buf->omx_buf->pBuffer);
+
+      if(port->enc_share_frame_buffer && buf->omx_buf->pBuffer && ((MetaBuffer *)(buf->omx_buf->pBuffer))->meta_handle){
+        free(((MetaBuffer *)(buf->omx_buf->pBuffer))->meta_handle);
+        ((MetaBuffer *)(buf->omx_buf->pBuffer))->meta_handle = NULL;
+      }
 
       tmp = OMX_FreeBuffer (comp->handle, port->index, buf->omx_buf);
 
@@ -3526,12 +3638,16 @@ static const GGetTypeFunction types[] = {
   gst_omx_amr_dec_get_type
 #ifdef HAVE_VP8
       , gst_omx_vp8_dec_get_type
+      , gst_omx_vp8_enc_get_type
 #endif
 #ifdef HAVE_THEORA
       , gst_omx_theora_dec_get_type
 #endif
 #ifdef HAVE_HEVC
       , gst_omx_h265_enc_get_type, gst_omx_h265_dec_get_type
+#endif
+#ifdef HAVE_VP9
+     , gst_omx_vp9_dec_get_type
 #endif
 };
 
@@ -4071,7 +4187,7 @@ plugin_init (GstPlugin * plugin)
     types[i] ();
 
   elements = g_key_file_get_groups (config, &n_elements);
-  for (i = 0; i < n_elements; i++) {
+  for (i = 0; elements != NULL && i < n_elements; i++) {
     GTypeQuery type_query;
     GTypeInfo type_info = { 0, };
     GType type, subtype;
