@@ -3688,6 +3688,8 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
 {
   GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (decoder);
   OMX_ERRORTYPE err = OMX_ErrorNone;
+  GstOMXVideoDecClass *klass = GST_OMX_VIDEO_DEC_GET_CLASS (self);
+  const gchar * cmp_name = klass->cdata.component_name;
 
   GST_DEBUG_OBJECT (self, "Flushing decoder");
 
@@ -3696,7 +3698,26 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
 
   /* 0) Pause the components */
   if (gst_omx_component_get_state (self->dec, 0) == OMX_StateExecuting) {
-    gst_omx_component_set_state (self->dec, OMX_StatePause);
+    if (!strncmp(cmp_name,
+                      "OMX.qti.video.decoder.h263sw",
+                      OMX_MAX_STRINGNAME_SIZE) ||
+      ! strncmp(cmp_name,
+                      "OMX.qti.video.decoder.mpeg4sw",
+                      OMX_MAX_STRINGNAME_SIZE) ||
+      ! strncmp(cmp_name,
+                      "OMX.qti.video.decoder.vc1sw",
+                      OMX_MAX_STRINGNAME_SIZE) ) {
+
+      /**
+      * Only the following state transitions are allowed in omx swvdec
+      *
+      * LOADED -> IDLE -> EXECUTING
+      * LOADED <- IDLE <- EXECUTING
+      */
+      gst_omx_component_set_state (self->dec, OMX_StateIdle);
+    } else {
+      gst_omx_component_set_state (self->dec, OMX_StatePause);
+    }
     gst_omx_component_get_state (self->dec, GST_CLOCK_TIME_NONE);
   }
 #if defined (USE_OMX_TARGET_RPI) && defined (HAVE_GST_GL)
