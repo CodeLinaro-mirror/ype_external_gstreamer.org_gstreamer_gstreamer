@@ -2464,7 +2464,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
       }
 
       GST_DEBUG_OBJECT (self, "decoder state caps: %" GST_PTR_FORMAT,
-       state->caps);
+       state ? state->caps : NULL);
 #ifdef _QTI_DMABUFFER_MODE_
       /*allocate omx buffer to match the output buffers*/
       if (!self->out_port_pool && self->dmabuf)
