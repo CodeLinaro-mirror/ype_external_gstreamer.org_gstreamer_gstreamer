@@ -3433,6 +3433,25 @@ gst_omx_video_dec_set_interlacing_parameters (GstOMXVideoDec * self,
 }
 #endif // USE_OMX_TARGET_ZYNQ_USCALE_PLUS
 
+static void
+gst_omx_video_dec_set_skipcropupdate (GstOMXVideoDec * self)
+{
+  OMX_ERRORTYPE err;
+  OMX_VENDOR_SKIP_CROP_UPDATE_IN_RECFG param;
+
+  GST_OMX_INIT_STRUCT (&param);
+  param.nSize = sizeof(OMX_VENDOR_SKIP_CROP_UPDATE_IN_RECFG);
+  param.nSkipCropUpdate = 1;
+  err = gst_omx_component_set_config (self->dec, OMX_IndexVendorVideoSkipCropUpdateInRecfg, (OMX_PTR)&param);
+  if (err != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self,
+        "Failed to set skipcropupdate: %s (0x%08x)",
+        gst_omx_error_to_string (err), err);
+  } else {
+    GST_INFO_OBJECT(self, "set skipcropupdate: %d", param.nSkipCropUpdate);
+  }
+}
+
 static gboolean
 gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state)
@@ -3582,6 +3601,8 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   gst_omx_video_dec_set_latency (self);
 #endif
+
+  gst_omx_video_dec_set_skipcropupdate(self);
 
   self->downstream_flow_ret = GST_FLOW_OK;
   return TRUE;
