@@ -3538,7 +3538,7 @@ gst_omx_video_dec_set_skipcropupdate (GstOMXVideoDec * self)
   GST_OMX_INIT_STRUCT (&param);
   param.nSize = sizeof(OMX_VENDOR_SKIP_CROP_UPDATE_IN_RECFG);
   param.nSkipCropUpdate = 1;
-  gst_omx_component_set_config (self->dec, OMX_IndexVendorVideoSkipCropUpdateInRecfg, (OMX_PTR)&param);
+  err = gst_omx_component_set_config (self->dec, OMX_IndexVendorVideoSkipCropUpdateInRecfg, (OMX_PTR)&param);
   if (err != OMX_ErrorNone) {
     GST_ERROR_OBJECT (self,
        "Failed to set skipcropupdate: %s (0x%08x)",
