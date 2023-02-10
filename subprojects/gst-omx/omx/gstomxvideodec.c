@@ -2464,7 +2464,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
       }
 
       GST_DEBUG_OBJECT (self, "decoder state caps: %" GST_PTR_FORMAT,
-       state->caps);
+       state ? state->caps : NULL);
 #ifdef _QTI_DMABUFFER_MODE_
       /*allocate omx buffer to match the output buffers*/
       if (!self->out_port_pool && self->dmabuf)
@@ -3529,6 +3529,25 @@ gst_omx_video_dec_set_interlacing_parameters (GstOMXVideoDec * self,
 }
 #endif // USE_OMX_TARGET_ZYNQ_USCALE_PLUS
 
+static void
+gst_omx_video_dec_set_skipcropupdate (GstOMXVideoDec * self)
+{
+  OMX_ERRORTYPE err;
+  OMX_VENDOR_SKIP_CROP_UPDATE_IN_RECFG param;
+
+  GST_OMX_INIT_STRUCT (&param);
+  param.nSize = sizeof(OMX_VENDOR_SKIP_CROP_UPDATE_IN_RECFG);
+  param.nSkipCropUpdate = 1;
+  err = gst_omx_component_set_config (self->dec, OMX_IndexVendorVideoSkipCropUpdateInRecfg, (OMX_PTR)&param);
+  if (err != OMX_ErrorNone) {
+    GST_ERROR_OBJECT (self,
+       "Failed to set skipcropupdate: %s (0x%08x)",
+       gst_omx_error_to_string (err), err);
+  } else {
+    GST_INFO_OBJECT(self, "set skipcropupdate: %d", param.nSkipCropUpdate);
+  }
+}
+
 static gboolean
 gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
     GstVideoCodecState * state)
@@ -3679,6 +3698,8 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
   gst_omx_video_dec_set_latency (self);
 #endif
 
+  gst_omx_video_dec_set_skipcropupdate(self);
+
   self->downstream_flow_ret = GST_FLOW_OK;
   return TRUE;
 }
@@ -3688,6 +3709,8 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
 {
   GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (decoder);
   OMX_ERRORTYPE err = OMX_ErrorNone;
+  GstOMXVideoDecClass *klass = GST_OMX_VIDEO_DEC_GET_CLASS (self);
+  const gchar * cmp_name = klass->cdata.component_name;
 
   GST_DEBUG_OBJECT (self, "Flushing decoder");
 
@@ -3696,7 +3719,26 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
 
   /* 0) Pause the components */
   if (gst_omx_component_get_state (self->dec, 0) == OMX_StateExecuting) {
-    gst_omx_component_set_state (self->dec, OMX_StatePause);
+    if (!strncmp(cmp_name,
+                      "OMX.qti.video.decoder.h263sw",
+                      OMX_MAX_STRINGNAME_SIZE) ||
+      ! strncmp(cmp_name,
+                      "OMX.qti.video.decoder.mpeg4sw",
+                      OMX_MAX_STRINGNAME_SIZE) ||
+      ! strncmp(cmp_name,
+                      "OMX.qti.video.decoder.vc1sw",
+                      OMX_MAX_STRINGNAME_SIZE) ) {
+
+      /**
+      * Only the following state transitions are allowed in omx swvdec
+      *
+      * LOADED -> IDLE -> EXECUTING
+      * LOADED <- IDLE <- EXECUTING
+      */
+      gst_omx_component_set_state (self->dec, OMX_StateIdle);
+    } else {
+      gst_omx_component_set_state (self->dec, OMX_StatePause);
+    }
     gst_omx_component_get_state (self->dec, GST_CLOCK_TIME_NONE);
   }
 #if defined (USE_OMX_TARGET_RPI) && defined (HAVE_GST_GL)

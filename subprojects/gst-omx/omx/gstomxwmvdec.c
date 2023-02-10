@@ -68,7 +68,7 @@ gst_omx_wmv_dec_class_init (GstOMXWMVDecClass * klass)
       "Decode WMV video streams",
       "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
 
-  gst_omx_set_default_role (&videodec_class->cdata, "video_decoder.wmv");
+  gst_omx_set_default_role (&videodec_class->cdata, "video_decoder.vc1");
 }
 
 static void
