@@ -558,6 +558,11 @@ update_param_avc (GstOMXH264Enc * self,
     param.eLoopFilterMode = self->loop_filter_mode;
   }
 
+  if (profile == OMX_VIDEO_AVCProfileHigh || profile == OMX_VIDEO_AVCProfileConstrainedHigh) {
+    GST_INFO_OBJECT (self, "Enable 264 enc direct8x8inference for profile(%d) HP/CHP", profile);
+    param.bDirect8x8Inference = OMX_TRUE;
+  }
+
   err =
       gst_omx_component_set_parameter (GST_OMX_VIDEO_ENC (self)->enc,
       OMX_IndexParamVideoAvc, &param);
