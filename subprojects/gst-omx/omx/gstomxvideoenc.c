@@ -1113,6 +1113,62 @@ set_zynqultrascaleplus_props (GstOMXVideoEnc * self)
 }
 #endif
 
+static OMX_ERRORTYPE SetVendorRateControlMode(GstOMXVideoEnc * self, OMX_VIDEO_CONTROLRATETYPE eControlRate)
+{
+  OMX_ERRORTYPE result = OMX_ErrorNone;
+  OMX_CONFIG_ANDROID_VENDOR_EXTENSIONTYPE* ext = NULL;
+  char extensionName[] = "qti-ext-enc-bitrate-mode";
+  OMX_U32 index, size;
+
+  size = sizeof(OMX_CONFIG_ANDROID_VENDOR_EXTENSIONTYPE);
+
+  ext = (OMX_CONFIG_ANDROID_VENDOR_EXTENSIONTYPE*)malloc(size);
+  if (!ext) {
+    GST_ERROR_OBJECT (self, "Unable to create rate control vendor extension instance");
+    return OMX_ErrorInsufficientResources;
+  }
+
+  GST_OMX_INIT_STRUCT(ext);
+  ext->nSize = size;
+  ext->nParamSizeUsed = 1;
+  //check all supported vendor extensions and get the index for the expected one
+  for (index = 0;;index++) {
+    ext->nIndex = index;
+    result = gst_omx_component_get_config(self->enc,
+         (OMX_INDEXTYPE)OMX_IndexConfigAndroidVendorExtension, (OMX_PTR)ext);
+    if (result == OMX_ErrorNone) {
+      GST_DEBUG_OBJECT(self, "try to find extension %s at index %u", (char*)ext->cName, index);
+      if (!strcmp((char*)ext->cName, extensionName)) {
+        GST_INFO_OBJECT (self,"found extension %s", extensionName);
+        break;
+      }
+    } else {
+      GST_ERROR_OBJECT (self,
+          "failed to get vendor extension %s, when trying to get index %u extension, ret 0x%x",
+          extensionName, index, result);
+      break;
+    }
+  }
+
+  if (result == OMX_ErrorNone) {
+    ext->nParam[0].bSet = OMX_TRUE;
+    ext->nParam[0].nInt32 = eControlRate;
+    result = gst_omx_component_set_config (self->enc,
+         OMX_IndexConfigAndroidVendorExtension, (OMX_PTR)ext);
+    if (result != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+          "Failed to set OMX_IndexConfigAndroidVendorExtension: %s (0x%08x)",
+          gst_omx_error_to_string (result), result);
+    }
+  }
+
+  if (ext) {
+    free(ext);
+    ext = NULL;
+  }
+  return result;
+}
+
 static gboolean
 gst_omx_video_enc_set_bitrate (GstOMXVideoEnc * self)
 {
@@ -1121,6 +1177,27 @@ gst_omx_video_enc_set_bitrate (GstOMXVideoEnc * self)
   gboolean result = TRUE;
 
   GST_OBJECT_LOCK (self);
+
+  if (self->control_rate == OMX_Video_ControlRateDisable)
+  {
+    //quant_i_frames refer to OMX_IndexParamVideoQuantization, which is OMX standard par;
+    //init_quant_i_frames refer to QOMX_IndexParamVideoInitialQp, which is vendor extension.
+    //Both of them could set qp.
+    if (self->quant_i_frames == 0xffffffff && self->init_quant_i_frames == 0xffffffff ) {
+      GST_ERROR_OBJECT (self, "quant_i_frames is not initialized for RC_OFF encoding, please set it!");
+      g_warn_if_fail(FALSE && "quant_i_frames is not initialized for RC_OFF encoding, please set it!");
+      result = FALSE;
+    } else {
+      err = SetVendorRateControlMode(self, self->control_rate);
+      if (err != OMX_ErrorNone)
+      {
+        GST_ERROR_OBJECT (self, "faild to Set vendor extended rate control mode RC_OFF");
+        result = FALSE;
+      }
+    }
+    GST_OBJECT_UNLOCK (self);
+    return result;
+  }
 
   GST_OMX_INIT_STRUCT (&bitrate_param);
   bitrate_param.nPortIndex = self->enc_out_port->index;
