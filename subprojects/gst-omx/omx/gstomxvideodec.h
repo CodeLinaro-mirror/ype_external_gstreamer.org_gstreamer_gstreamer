@@ -111,10 +111,6 @@ struct _GstOMXVideoDec
 #ifdef _OMX_ZERO_MEMCOPY_RENDERING_
   GQuark omx_outbuf_quark;
 #endif
-  GList *outstanding_bufs;
-  gint width;
-  gint height;
-  gboolean video_info_changed;
   guint output_picture_order_mode;
   gboolean low_latency_mode;
 #ifdef USE_GBM
