@@ -427,7 +427,11 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
       case GST_OMX_MESSAGE_BUFFER_DONE:{
         GstOMXBuffer *buf = msg->content.buffer_done.buffer->pAppPrivate;
         GstOMXPort *port;
-
+        if (!buf) {
+          GST_ERROR_OBJECT (comp->parent,
+              "AppPrivate have been reset for undesiable behavior, no further action needed");
+           break;
+        }
         port = buf->port;
 
         buf->used = FALSE;
