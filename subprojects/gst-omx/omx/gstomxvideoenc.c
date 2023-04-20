@@ -812,7 +812,7 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
   klass->cdata.type = GST_OMX_COMPONENT_TYPE_FILTER;
   klass->cdata.default_sink_template_caps =
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
-            "{ NV12 }") ";"
+            GST_OMX_VIDEO_SUPPORTED_FORMATS) ";"
       GST_VIDEO_CAPS_MAKE (GST_OMX_VIDEO_SUPPORTED_FORMATS);
 
   klass->handle_output_frame =

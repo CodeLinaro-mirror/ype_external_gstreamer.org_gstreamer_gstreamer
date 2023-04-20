@@ -523,7 +523,7 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
   klass->cdata.type = GST_OMX_COMPONENT_TYPE_FILTER;
   klass->cdata.default_src_template_caps =
     GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_DMABUF,
-          "{ NV12, P010_10LE, NV12_10LE32 }") ";"
+          GST_OMX_VIDEO_SUPPORTED_FORMATS) ";"
 #if defined (HAVE_GST_GL)
       GST_VIDEO_CAPS_MAKE_WITH_FEATURES (GST_CAPS_FEATURE_MEMORY_GL_MEMORY,
       "RGBA") "; "
