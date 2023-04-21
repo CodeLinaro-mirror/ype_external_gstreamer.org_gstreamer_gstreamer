@@ -199,7 +199,7 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
   g_object_class_install_property (gobject_class,
       PROP_PERIODICITYOFIDRFRAMES_COMPAT, g_param_spec_uint ("periodicty-idr",
           "IDR periodicity",
-          "Periodicity of IDR frames DEPRECATED - only for backwards compat",
+          "Periodicity of IDR frames (0xffffffff=component default) DEPRECATED - only for backwards compat",
           0, G_MAXUINT,
           GST_OMX_H264_VIDEO_ENC_PERIODICITY_OF_IDR_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
@@ -209,7 +209,7 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
       PROP_INTERVALOFCODINGINTRAFRAMES,
       g_param_spec_uint ("interval-intraframes",
           "Interval of coding Intra frames",
-          "Interval of coding Intra frames", 0,
+          "Interval of coding Intra frames (0xffffffff=component default)", 0,
           G_MAXUINT,
           GST_OMX_H264_VIDEO_ENC_INTERVAL_OF_CODING_INTRA_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
