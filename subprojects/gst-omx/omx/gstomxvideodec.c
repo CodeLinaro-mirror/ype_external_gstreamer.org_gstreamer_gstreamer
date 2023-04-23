@@ -709,7 +709,7 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
 #endif
 
 #ifdef _QTI_DMABUFFER_MODE_
- self->dmabuf = TRUE;
+  self->dmabuf = TRUE;
 #endif
 
   if (!self->dec_in_port || !self->dec_out_port)
@@ -2551,24 +2551,20 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
       frame->output_buffer = outbuf;
 #ifdef _QTI_DMABUFFER_MODE_
       update_output_buffer (self, buf, outbuf);
-      buf = NULL;
-      flow_ret =
-        gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
-#else
+#endif
       flow_ret =
           gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
-      buf = NULL;
-#endif
       frame = NULL;
+      buf = NULL;
     } else {
 #ifdef _OMX_ZERO_MEMCOPY_RENDERING_
-    if (buf->omx_buf) {
-      frame->output_buffer = _omx_out_buffer_create (self, buf);
-      buf = NULL;
-      flow_ret =
-        gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
-      frame = NULL;
-    }
+      if (buf->omx_buf) {
+        frame->output_buffer = _omx_out_buffer_create (self, buf);
+        buf = NULL;
+        flow_ret =
+          gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
+        frame = NULL;
+      }
 
 #else
       if ((flow_ret =
