@@ -497,21 +497,21 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_INIT_QUANT_I_FRAMES,
       g_param_spec_uint ("init-quant-i-frames", "Initial I-Frame Quantization",
-          "Initial Quantization parameter for I-frames (0xffffffff=component default)",
+          "Initial Quantization parameter for I-frames (0xffffffff=component default) if RC enabled, quant-i-frames is for RC off",
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_I_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
   g_object_class_install_property (gobject_class, PROP_INIT_QUANT_P_FRAMES,
       g_param_spec_uint ("init-quant-p-frames", "Initial P-Frame Quantization",
-          "Initial Quantization parameter for P-frames (0xffffffff=component default)",
+          "Initial Quantization parameter for P-frames (0xffffffff=component default) if RC enabled, quant-p-frames is for RC off",
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_P_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
   g_object_class_install_property (gobject_class, PROP_INIT_QUANT_B_FRAMES,
       g_param_spec_uint ("init-quant-b-frames", "Initial B-Frame Quantization",
-          "Initial Quantization parameter for B-frames (0xffffffff=component default)",
+          "Initial Quantization parameter for B-frames (0xffffffff=component default) if RC enabled, quant-b-frames is for RC off",
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_INIT_QUANT_B_FRAMES_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
