@@ -25,6 +25,8 @@
 #include "config.h"
 #endif
 
+#include <sys/mman.h>
+#include "OMX_QCOMExtns.h"
 #include "gstomxbufferpool.h"
 #include "gstomxvideo.h"
 
@@ -314,6 +316,10 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
   GstBuffer *buf;
   GstMemory *mem;
   GstMemory *foreign_mem = NULL;
+  GstOMXBuffer *omx_buf;
+
+  omx_buf = g_ptr_array_index (pool->port->buffers, pool->current_buffer_index);
+  g_return_val_if_fail (omx_buf != NULL, GST_FLOW_ERROR);
 
   if (pool->other_pool) {
     guint n;
@@ -344,11 +350,23 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
 
     pool->need_copy = FALSE;
   } else {
+    GstMemory *mem;
+    gpointer data;
+    OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *pPMEMInfo = NULL;
+
     const guint nstride = pool->port->port_def.format.video.nStride;
     const guint nslice = pool->port->port_def.format.video.nSliceHeight;
     gsize offset[GST_VIDEO_MAX_PLANES] = { 0, };
     gint stride[GST_VIDEO_MAX_PLANES] = { nstride, 0, };
+#ifdef _QTI_DMABUFFER_MODE_
+    pPMEMInfo = (OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *)
+      ((OMX_QCOM_PLATFORM_PRIVATE_LIST *)omx_buf->omx_buf->pPlatformPrivate)->entryList->entry;
 
+    if (!pPMEMInfo) {
+      GST_ERROR_OBJECT (pool, "Read of ionBufInfo from port buffer failed for DMABUF mode.");
+      return GST_FLOW_ERROR;
+    }
+#endif
     buf = gst_buffer_new ();
 
     switch (GST_VIDEO_INFO_FORMAT (&pool->video_info)) {
@@ -421,6 +439,11 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
 
       pool->need_copy = need_copy;
     }
+#ifdef _QTI_DMABUFFER_MODE_
+    /* no need_copy for qti buffer share mode */
+    GST_INFO_OBJECT(pool, "For dec dmabuf mode, pool->need_copy will be false!");
+    pool->need_copy = FALSE;
+#endif
 
     if (pool->need_copy || pool->add_videometa) {
       /* We always add the videometa. It's the job of the user
@@ -434,7 +457,20 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
           GST_VIDEO_INFO_WIDTH (&pool->video_info),
           GST_VIDEO_INFO_HEIGHT (&pool->video_info),
           GST_VIDEO_INFO_N_PLANES (&pool->video_info), offset, stride);
-
+      if (meta) {
+        meta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
+        meta->offset[3] = pPMEMInfo ? pPMEMInfo->size : 0;
+        meta->stride[2] = pPMEMInfo ? pPMEMInfo->pmem_fd : -1;
+#ifdef USE_GBM
+        meta->stride[3] = pPMEMInfo ? pPMEMInfo->pmeta_fd: -1;
+#else
+        meta->stride[3] = -1;
+#endif
+        GST_INFO_OBJECT (pool,"Add ion-gbm fd %d, meta fd %d, sz %d with signature QaUT in GstVideoMeta\n", meta->stride[2], meta->stride[3], meta->offset[3]);
+      } else {
+        GST_ERROR_OBJECT (pool, "gst_buffer_add_video_meta_full() fail, ret NULL");
+        return GST_FLOW_ERROR;
+      }
       if (gst_omx_video_get_port_padding (pool->port, &pool->video_info,
               &align))
         gst_video_meta_set_alignment (meta, align);

@@ -21,6 +21,7 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#include "OMX_QCOMExtns.h"
 
 #include "gstomxallocator.h"
 #include <gst/allocators/gstdmabuf.h>
@@ -100,7 +101,7 @@ gst_omx_memory_quark (void)
   return quark;
 }
 
-static GstOMXMemory *
+GstOMXMemory *
 gst_omx_memory_new (GstOMXAllocator * allocator, GstOMXBuffer * omx_buf,
     GstMemoryFlags flags, GstMemory * parent, gssize offset, gssize size)
 {
@@ -456,7 +457,7 @@ gst_omx_allocator_memory_dispose (GstMemory * mem)
   return TRUE;
 }
 
-static inline void
+void
 install_mem_dispose (GstOMXMemory * mem)
 {
   GstMemory *managed_mem = (GstMemory *) mem;
@@ -477,6 +478,7 @@ gst_omx_allocator_allocate (GstOMXAllocator * allocator, gint index,
 {
   GstOMXMemory *mem;
   GstOMXBuffer *omx_buf;
+  OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *pPMEMInfo = NULL;
 
   g_return_val_if_fail (allocator->port->buffers, NULL);
   g_return_val_if_fail (allocator->memories, NULL);
@@ -498,10 +500,24 @@ gst_omx_allocator_allocate (GstOMXAllocator * allocator, gint index,
       break;
     case GST_OMX_ALLOCATOR_FOREIGN_MEM_DMABUF:
     {
-      gint fd = GPOINTER_TO_INT (omx_buf->omx_buf->pBuffer);
+      gint fd = -1;
+#ifdef _QTI_DMABUFFER_MODE_
+      pPMEMInfo = (OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *)
+          ((OMX_QCOM_PLATFORM_PRIVATE_LIST *)omx_buf->omx_buf->pPlatformPrivate)->entryList->entry;
+
+      if (!pPMEMInfo) {
+        GST_ERROR_OBJECT (allocator, "Read of ionBufInfo from port buffer failed for DMABUF mode.");
+        return GST_FLOW_ERROR;
+      }
+      fd = pPMEMInfo->pmem_fd;
+      mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd, pPMEMInfo->size,
+          GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+#else
+      fd = GPOINTER_TO_INT (omx_buf->omx_buf->pBuffer);
       mem->foreign_mem =
           gst_dmabuf_allocator_alloc (allocator->foreign_allocator, fd,
           omx_buf->omx_buf->nAllocLen);
+#endif
       gst_mini_object_set_qdata (GST_MINI_OBJECT (mem->foreign_mem),
           GST_OMX_MEMORY_QUARK, mem, NULL);
       install_mem_dispose (mem);

@@ -55,6 +55,7 @@
 #include "OMX_QCOMExtns.h"
 #endif
 
+#include "gstomxallocator.h"
 #include <vidc/media/msm_media_info.h>
 
 #ifdef USE_GBM
@@ -359,6 +360,65 @@ create_fail:
 
 #endif
 
+#ifdef _QTI_DMABUFFER_MODE_
+static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuffer, GstBuffer *out_buf)
+{
+  GstVideoCodecState *state;
+  GstVideoInfo *vinfo;
+  OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *pPMEMInfo = NULL;
+  if (pBuffer == NULL)
+    return FALSE;
+
+  state =
+    gst_video_decoder_get_output_state (GST_VIDEO_DECODER (dec));
+  if (state)
+    vinfo = &state->info;
+  else{
+    g_warn_if_fail(FALSE && "state should not be NULL here!");
+    return FALSE;
+  }
+  pPMEMInfo = (OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *)
+    ((OMX_QCOM_PLATFORM_PRIVATE_LIST *)pBuffer->omx_buf->pPlatformPrivate)->entryList->entry;
+
+  if (!pPMEMInfo) {
+    GST_ERROR_OBJECT (dec, "Read of ionBufInfo from port buffer failed.");
+    return FALSE;
+  }
+
+  /* MSM:8996- Update the "ion_buf_size" field using the "nFilledLen".
+  * Ideally its expected to get updated from the underlying decoder.
+  */
+  pPMEMInfo->size = pBuffer->omx_buf->nFilledLen;
+
+  GST_BUFFER_PTS (out_buf) =
+    gst_util_uint64_scale (pBuffer->omx_buf->nTimeStamp, GST_SECOND,
+      OMX_TICKS_PER_SECOND);
+
+  if (pBuffer->omx_buf->nTickCount != 0)
+    GST_BUFFER_DURATION (out_buf) =
+      gst_util_uint64_scale (pBuffer->omx_buf->nTickCount, GST_SECOND,
+        OMX_TICKS_PER_SECOND);
+
+  GST_DEBUG_OBJECT (dec,
+    "gst out time in update_output_buffer() %" GST_TIME_FORMAT ", omx time: %" G_GINT64_FORMAT,
+    GST_TIME_ARGS (out_buf->pts), pBuffer->omx_buf->nTimeStamp);
+
+#ifdef USE_GBM
+  //That gstreamer buf is probably already attached modifier, check it at first.
+  //As modifier only store some usage info. like ubwc and security, common event like resolution change won't change modifier.
+  //Therefore, if already attached modifier, needn't update or re-attach it.
+  if (!gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (out_buf), gst_fbuf_modifier_qdata_quark())) {
+    attach_new_modifier(dec, out_buf, vinfo, pPMEMInfo);
+  }
+#endif
+
+done:
+  gst_video_codec_state_unref (state);
+  return TRUE;
+
+}
+#endif
+
 static void
 gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
@@ -647,6 +707,10 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   GST_DEBUG_OBJECT (self, "Configure decoder output to export dmabuf");
   self->dmabuf = gst_omx_port_set_dmabuf (self->dec_out_port, TRUE);
+#endif
+
+#ifdef _QTI_DMABUFFER_MODE_
+  self->dmabuf = TRUE;
 #endif
 
   if (!self->dec_in_port || !self->dec_out_port)
@@ -1161,7 +1225,11 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
 
   pool = gst_video_decoder_get_buffer_pool (GST_VIDEO_DECODER (self));
   /* do not use out_port_pool */
+#ifdef _QTI_DMABUFFER_MODE_
+  if (pool) {
+#else
   if (FALSE) {
+#endif
     GstAllocator *allocator;
 
     config = gst_buffer_pool_get_config (pool);
@@ -1190,6 +1258,8 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
     } else {
       min = max;
     }
+
+    min = max = port->port_def.nBufferCountMin;
 
     add_videometa = gst_buffer_pool_config_has_option (config,
         GST_BUFFER_POOL_OPTION_VIDEO_META);
@@ -2119,7 +2189,101 @@ set_outbuffer_interlace_flags (GstOMXBuffer * buf, GstBuffer * outbuf)
   }
 }
 #endif // USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+#ifdef _QTI_DMABUFFER_MODE_
+static OMX_ERRORTYPE
+gst_omx_video_dec_allocate_outport_omx_buffers (GstOMXVideoDec * self)
+{
+  OMX_ERRORTYPE err = OMX_ErrorNone;
+  GstOMXPort *port;
+  GstBufferPool *pool;
+  GstStructure *config;
+  gboolean add_videometa = FALSE;
+  GstCaps *caps = NULL;
+  guint min = 0, max = 0;
+  port = self->dec_out_port;
 
+  pool = gst_video_decoder_get_buffer_pool (GST_VIDEO_DECODER (self));
+  /* do not use out_port_pool */
+  if (pool) {
+    GstAllocator *allocator;
+
+    config = gst_buffer_pool_get_config (pool);
+    if (!gst_buffer_pool_config_get_params (config, &caps, NULL, &min, &max)) {
+      GST_ERROR_OBJECT (self, "Can't get buffer pool params");
+      gst_structure_free (config);
+      err = OMX_ErrorUndefined;
+      goto done;
+    }
+    if (!gst_buffer_pool_config_get_allocator (config, &allocator, NULL)) {
+      GST_ERROR_OBJECT (self, "Can't get buffer pool allocator");
+      gst_structure_free (config);
+      err = OMX_ErrorUndefined;
+      goto done;
+    }
+
+    add_videometa = gst_buffer_pool_config_has_option (config,
+        GST_BUFFER_POOL_OPTION_VIDEO_META);
+    gst_structure_free (config);
+    caps = caps ? gst_caps_ref (caps) : NULL;
+
+    GST_DEBUG_OBJECT (self, "Trying to use pool %p with caps %" GST_PTR_FORMAT
+        " and memory type %s", pool, caps,
+        (allocator ? allocator->mem_type : "(null)"));
+  } else {
+    gst_caps_replace (&caps, NULL);
+    GST_ERROR_OBJECT (self, "No pool available, not negotiated yet");
+  }
+  /*to match the omx buffer allocation */
+  min = max = port->port_def.nBufferCountActual;
+
+  if (caps)
+    self->out_port_pool =
+        gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->dec, port,
+        self->dmabuf ? GST_OMX_BUFFER_MODE_DMABUF :
+        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY);
+
+
+  if (caps) {
+    config = gst_buffer_pool_get_config (self->out_port_pool);
+
+    if (add_videometa)
+      gst_buffer_pool_config_add_option (config,
+          GST_BUFFER_POOL_OPTION_VIDEO_META);
+
+    gst_buffer_pool_config_set_params (config, caps,
+        self->dec_out_port->port_def.nBufferSize, min, max);
+
+    if (!gst_buffer_pool_set_config (self->out_port_pool, config)) {
+      GST_INFO_OBJECT (self, "Failed to set config on internal pool");
+      gst_object_unref (self->out_port_pool);
+      self->out_port_pool = NULL;
+      goto done;
+    }
+
+    /* This now allocates all the buffers */
+    if (!gst_buffer_pool_set_active (self->out_port_pool, TRUE)) {
+      GST_INFO_OBJECT (self, "Failed to activate internal pool");
+      gst_object_unref (self->out_port_pool);
+      self->out_port_pool = NULL;
+    }
+  } else if (self->out_port_pool) {
+    gst_object_unref (self->out_port_pool);
+    self->out_port_pool = NULL;
+  }
+
+done:
+  if (!self->out_port_pool && err == OMX_ErrorNone)
+    GST_DEBUG_OBJECT (self,
+        "Not using our internal pool and copying buffers for downstream");
+
+  if (caps)
+    gst_caps_unref (caps);
+  if (pool)
+    gst_object_unref (pool);
+
+  return err;
+}
+#endif
 static void
 gst_omx_video_dec_loop (GstOMXVideoDec * self)
 {
@@ -2233,6 +2397,12 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
         GST_ERROR_OBJECT (self, "decoder state is NULL, something error!");
       }
 
+#ifdef _QTI_DMABUFFER_MODE_
+      /*allocate omx buffer to match the output buffers*/
+      if (!self->out_port_pool && self->dmabuf)
+        gst_omx_video_dec_allocate_outport_omx_buffers (self);
+#endif
+
       gst_video_codec_state_unref (state);
 
       GST_VIDEO_DECODER_STREAM_UNLOCK (self);
@@ -2313,6 +2483,10 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
             copy_frame (&GST_OMX_BUFFER_POOL (self->out_port_pool)->video_info,
             outbuf);
 
+#ifdef _QTI_DMABUFFER_MODE_
+      update_output_buffer (self, buf, outbuf);
+#endif
+
       buf = NULL;
     } else {
 #ifdef _OMX_ZERO_MEMCOPY_RENDERING_
@@ -2369,6 +2543,10 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
             outbuf);
 
       frame->output_buffer = outbuf;
+
+#ifdef _QTI_DMABUFFER_MODE_
+      update_output_buffer (self, buf, outbuf);
+#endif
 
       flow_ret =
           gst_video_decoder_finish_frame (GST_VIDEO_DECODER (self), frame);
