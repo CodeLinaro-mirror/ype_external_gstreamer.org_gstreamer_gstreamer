@@ -263,6 +263,27 @@ gst_omx_video_enc_roi_quality_type (void)
 }
 #endif
 
+#define GST_TYPE_OMX_VIDEO_ENC_BITRATE_SAVING_MODE (gst_omx_video_enc_get_bitrate_saving_mode ())
+static GType
+gst_omx_video_enc_get_bitrate_saving_mode (void)
+{
+  static GType qtype = 0;
+
+  if (qtype == 0) {
+    static const GEnumValue values[] = {
+      {GST_VIDEO_BITRATE_SAVING_MODE_DISABLE, "Disable", "disable"},
+      {GST_VIDEO_BITRATE_SAVING_MODE_8BIT, "Only enable 8 bit saving mode", "only enable 8 bit saving mode"},
+      {GST_VIDEO_BITRATE_SAVING_MODE_10BIT, "Only enable 10 bit saving mode", "only enable 10 bit saving mode"},
+      {GST_VIDEO_BITRATE_SAVING_MODE_ALL, "Enable all saving mode", "enable all saving mode"},
+      {0xffffffff, "Component Default", "default"},
+      {0, NULL, NULL}
+    };
+
+    qtype = g_enum_register_static ("GstOMXVideoEncBitrateSavingMode", values);
+  }
+  return qtype;
+}
+
 /* prototypes */
 static void gst_omx_video_enc_finalize (GObject * object);
 static void gst_omx_video_enc_set_property (GObject * object, guint prop_id,
@@ -342,6 +363,7 @@ enum
   PROP_INTRA_REFRESH_MBS,
   PROP_DOWNSCALE_WIDTH,
   PROP_DOWNSCALE_HEIGHT,
+  PROP_TARGET_BITRATE_SAVING_MODE,
 };
 
 /* FIXME: Better defaults */
@@ -384,6 +406,7 @@ enum
 #define GST_OMX_VIDEO_ENC_INTRA_REFRESH_MODE_DEFAULT (0x7fffffff)
 #define GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_BITRATE_SAVING_MODE_DEFAULT (0xffffffff)
 
 /* ZYNQ_USCALE_PLUS encoder custom events */
 #define OMX_ALG_GST_EVENT_INSERT_LONGTERM "omx-alg/insert-longterm"
@@ -702,6 +725,14 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class, PROP_TARGET_BITRATE_SAVING_MODE,
+      g_param_spec_enum ("bps-saving-mode", "Bps saving mode",
+          "Bitrate saving mode (0xffffffff=component default)",
+          GST_TYPE_OMX_VIDEO_ENC_BITRATE_SAVING_MODE,
+          GST_OMX_VIDEO_ENC_BITRATE_SAVING_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_enc_change_state);
 
@@ -779,6 +810,7 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
   self->intra_refresh_mbs = 0;
   self->downscale_width = GST_OMX_VIDEO_ENC_DOWNSCALE_WIDTH_DEFAULT;
   self->downscale_height = GST_OMX_VIDEO_ENC_DOWNSCALE_HEIGHT_DEFAULT;
+  self->bitrate_saving_mode = GST_OMX_VIDEO_ENC_BITRATE_SAVING_MODE_DEFAULT;
 
   g_mutex_init (&self->drain_lock);
   g_cond_init (&self->drain_cond);
@@ -1393,6 +1425,21 @@ gst_omx_video_enc_open (GstVideoEncoder * encoder)
         }
       }
     }
+
+    if (self->enc && self->bitrate_saving_mode != 0xffffffff) {
+      err =
+        gst_omx_component_set_config (self->enc,
+          OMX_QTIIndexConfigContentAdaptiveCoding, &(self->bitrate_saving_mode));
+
+      if (err != OMX_ErrorNone) {
+        GST_ERROR_OBJECT (self,
+          "Failed to set bitrate saving mode: %s (0x%08x)",
+          gst_omx_error_to_string (err), err);
+      } else {
+        GST_INFO_OBJECT(self, "set bitrate saving mode %d\n", self->bitrate_saving_mode);
+      }
+    }
+
   }
 
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
@@ -1502,6 +1549,9 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
               gst_omx_error_to_string (err), err);
       }
       GST_OBJECT_UNLOCK (self);
+      break;
+    case PROP_TARGET_BITRATE_SAVING_MODE:
+      self->bitrate_saving_mode = g_value_get_enum (value);
       break;
     case PROP_QUANT_I_FRAMES:
       self->quant_i_frames = g_value_get_uint (value);
@@ -1638,6 +1688,9 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       GST_OBJECT_LOCK (self);
       g_value_set_uint (value, self->target_bitrate);
       GST_OBJECT_UNLOCK (self);
+      break;
+    case PROP_TARGET_BITRATE_SAVING_MODE:
+      g_value_set_enum (value, self->bitrate_saving_mode);
       break;
     case PROP_QUANT_I_FRAMES:
       g_value_set_uint (value, self->quant_i_frames);

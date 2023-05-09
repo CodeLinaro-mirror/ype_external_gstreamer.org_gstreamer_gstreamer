@@ -51,6 +51,7 @@
 #include "gstomxanalogaudiosink.h"
 #include "gstomxhdmiaudiosink.h"
 #include "gstomxvp9dec.h"
+#include "OMX_QCOMExtns.h"
 
 GST_DEBUG_CATEGORY (gstomx_debug);
 #define GST_CAT_DEFAULT gstomx_debug
@@ -1744,6 +1745,8 @@ omx_index_type_to_str (OMX_INDEXTYPE index)
       return "OMX_IndexConfigTimeSeekMode";
     case OMX_IndexKhronosExtensions:
       return "OMX_IndexKhronosExtensions";
+    case OMX_QTIIndexConfigContentAdaptiveCoding:
+      return "OMX_QTIIndexConfigContentAdaptiveCoding";
     case OMX_IndexVendorStartUnused:
       return "OMX_IndexVendorStartUnused";
     case OMX_IndexMax:
