@@ -34,7 +34,6 @@
 #include "gstomxvideo.h"
 #include "gstomxvideoenc.h"
 #include "OMX_QCOMExtns.h"
-#include <gbm_priv.h>
 
 #ifndef ALIGN
 #define ALIGN(__sz, __align) (((__align) & ((__align) - 1)) ?\
@@ -47,7 +46,8 @@
 #include <OMX_Index.h>
 #endif
 
-struct StoreMetaDataInBuffersParams {
+#define PRIV_FLAGS_UBWC_ALIGNED 0x08000000  //actually, defined in gr_priv_handle.h
+struct StoreMetaDataInBuffersParams {  //actually, defined in HardwareAPI.h
     OMX_U32 nSize;
     OMX_VERSIONTYPE nVersion;
     OMX_U32 nPortIndex;
@@ -3649,11 +3649,11 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
   GstVideoMeta *meta = gst_buffer_get_video_meta (inbuf);
   gint stride = meta ? meta->stride[0] : info->stride[0];
 
-  GST_DEBUG_OBJECT (self, "self->enc_share_frame_buffer %d", self->enc_share_frame_buffer);
+  GST_LOG_OBJECT (self, "enc receive gst inbuf %p, PTS %" GST_TIME_FORMAT ", self->enc_share_frame_buffer flag %d", inbuf, GST_TIME_ARGS(GST_BUFFER_PTS(inbuf)), (int)self->enc_share_frame_buffer);
   if(self->enc_share_frame_buffer) {
     OMX_S32 nFds = 1;
     OMX_S32 nInts = 3;
-    GstVideoMeta *QVMeta = gst_buffer_get_video_meta(inbuf);
+    GstVideoMeta *QVMeta = meta;
     gsize offset = 0;
     gsize maxsize = 0;
     gsize size = 0;
@@ -3683,7 +3683,7 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     pMetaHandle->data[2] = maxsize > size ? maxsize: size;
     pMetaHandle->data[3] = ITUR601; //TODO: will investigate this parameter's impact later
     if (outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
-      pMetaHandle->data[3] |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      pMetaHandle->data[3] |= PRIV_FLAGS_UBWC_ALIGNED;
     }
     pMetaBuffer->buffer_type = CameraSource;
     GST_DEBUG_OBJECT (self, "fill meta buffer, buffer data fd %d, size %d, max size %d, data[2] %d\n", (int)(pMetaHandle->data[0]), size, maxsize, pMetaHandle->data[2]);
