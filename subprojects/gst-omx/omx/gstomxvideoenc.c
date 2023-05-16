@@ -40,6 +40,14 @@
 #include <OMX_Index.h>
 #endif
 
+#define PRIV_FLAGS_UBWC_ALIGNED 0x08000000  //actually, defined in gr_priv_handle.h
+struct StoreMetaDataInBuffersParams {  //actually, defined in HardwareAPI.h
+    OMX_U32 nSize;
+    OMX_VERSIONTYPE nVersion;
+    OMX_U32 nPortIndex;
+    OMX_BOOL bStoreMetaData;
+};
+
 GST_DEBUG_CATEGORY_STATIC (gst_omx_video_enc_debug_category);
 #define GST_CAT_DEFAULT gst_omx_video_enc_debug_category
 
@@ -338,6 +346,7 @@ enum
   PROP_MAX_QUANT_P_FRAMES,
   PROP_MIN_QUANT_B_FRAMES,
   PROP_MAX_QUANT_B_FRAMES,
+  PROP_SHARE_BUFFER,
   PROP_QP_MODE,
   PROP_MIN_QP,
   PROP_MAX_QP,
@@ -381,6 +390,7 @@ enum
 #define GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT (0xffffffff)
+#define GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT FALSE
 
 #define GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT (10)
@@ -531,6 +541,14 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
       g_param_spec_uint ("max-quant-b-frames", "B-Frame Max Quantization",
           "Max Quantization parameter for B-frames (0xffffffff=component default)",
           0, G_MAXUINT, GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_SHARE_BUFFER,
+      g_param_spec_boolean ("share-buffer",
+          "share buffer with source",
+          "share buffer with source",
+          GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -781,6 +799,8 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
   self->max_quant_i_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_I_FRAMES_DEFAULT;
   self->max_quant_p_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT;
   self->max_quant_b_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT;
+  self->enc_share_frame_buffer = GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT;
+
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   self->qp_mode = GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT;
   self->min_qp = GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT;
@@ -1113,6 +1133,62 @@ set_zynqultrascaleplus_props (GstOMXVideoEnc * self)
 }
 #endif
 
+static OMX_ERRORTYPE SetVendorRateControlMode(GstOMXVideoEnc * self, OMX_VIDEO_CONTROLRATETYPE eControlRate)
+{
+  OMX_ERRORTYPE result = OMX_ErrorNone;
+  OMX_CONFIG_ANDROID_VENDOR_EXTENSIONTYPE* ext = NULL;
+  char extensionName[] = "qti-ext-enc-bitrate-mode";
+  OMX_U32 index, size;
+
+  size = sizeof(OMX_CONFIG_ANDROID_VENDOR_EXTENSIONTYPE);
+
+  ext = (OMX_CONFIG_ANDROID_VENDOR_EXTENSIONTYPE*)malloc(size);
+  if (!ext) {
+    GST_ERROR_OBJECT (self, "Unable to create rate control vendor extension instance");
+    return OMX_ErrorInsufficientResources;
+  }
+
+  GST_OMX_INIT_STRUCT(ext);
+  ext->nSize = size;
+  ext->nParamSizeUsed = 1;
+  //check all supported vendor extensions and get the index for the expected one
+  for (index = 0;;index++) {
+    ext->nIndex = index;
+    result = gst_omx_component_get_config(self->enc,
+         (OMX_INDEXTYPE)OMX_IndexConfigAndroidVendorExtension, (OMX_PTR)ext);
+    if (result == OMX_ErrorNone) {
+      GST_DEBUG_OBJECT(self, "try to find extension %s at index %u", (char*)ext->cName, index);
+      if (!strcmp((char*)ext->cName, extensionName)) {
+        GST_INFO_OBJECT (self,"found extension %s", extensionName);
+        break;
+      }
+    } else {
+      GST_ERROR_OBJECT (self,
+          "failed to get vendor extension %s, when trying to get index %u extension, ret 0x%x",
+          extensionName, index, result);
+      break;
+    }
+  }
+
+  if (result == OMX_ErrorNone) {
+    ext->nParam[0].bSet = OMX_TRUE;
+    ext->nParam[0].nInt32 = eControlRate;
+    result = gst_omx_component_set_config (self->enc,
+         OMX_IndexConfigAndroidVendorExtension, (OMX_PTR)ext);
+    if (result != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+          "Failed to set OMX_IndexConfigAndroidVendorExtension: %s (0x%08x)",
+          gst_omx_error_to_string (result), result);
+    }
+  }
+
+  if (ext) {
+    free(ext);
+    ext = NULL;
+  }
+  return result;
+}
+
 static gboolean
 gst_omx_video_enc_set_bitrate (GstOMXVideoEnc * self)
 {
@@ -1121,6 +1197,27 @@ gst_omx_video_enc_set_bitrate (GstOMXVideoEnc * self)
   gboolean result = TRUE;
 
   GST_OBJECT_LOCK (self);
+
+  if (self->control_rate == OMX_Video_ControlRateDisable)
+  {
+    //quant_i_frames refer to OMX_IndexParamVideoQuantization, which is OMX standard par;
+    //init_quant_i_frames refer to QOMX_IndexParamVideoInitialQp, which is vendor extension.
+    //Both of them could set qp.
+    if (self->quant_i_frames == 0xffffffff && self->init_quant_i_frames == 0xffffffff ) {
+      GST_ERROR_OBJECT (self, "quant_i_frames is not initialized for RC_OFF encoding, please set it!");
+      g_warn_if_fail(FALSE && "quant_i_frames is not initialized for RC_OFF encoding, please set it!");
+      result = FALSE;
+    } else {
+      err = SetVendorRateControlMode(self, self->control_rate);
+      if (err != OMX_ErrorNone)
+      {
+        GST_ERROR_OBJECT (self, "faild to Set vendor extended rate control mode RC_OFF");
+        result = FALSE;
+      }
+    }
+    GST_OBJECT_UNLOCK (self);
+    return result;
+  }
 
   GST_OMX_INIT_STRUCT (&bitrate_param);
   bitrate_param.nPortIndex = self->enc_out_port->index;
@@ -1589,6 +1686,9 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
     case PROP_MAX_QUANT_B_FRAMES:
       self->max_quant_b_frames = g_value_get_uint (value);
       break;
+    case PROP_SHARE_BUFFER:
+      self->enc_share_frame_buffer = g_value_get_boolean (value);
+      break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
       self->qp_mode = g_value_get_enum (value);
@@ -1727,6 +1827,9 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_MAX_QUANT_B_FRAMES:
       g_value_set_uint (value, self->max_quant_b_frames);
+      break;
+    case PROP_SHARE_BUFFER:
+      g_value_set_boolean(value, self->enc_share_frame_buffer);
       break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
@@ -2611,6 +2714,8 @@ gst_omx_video_enc_ensure_nb_in_buffers (GstOMXVideoEnc * self)
 static gboolean
 gst_omx_video_enc_allocate_in_buffers (GstOMXVideoEnc * self)
 {
+  self->enc_in_port->enc_share_frame_buffer = self->enc_share_frame_buffer;
+
   switch (self->input_allocation) {
     case GST_OMX_BUFFER_ALLOCATION_ALLOCATE_BUFFER:
       if (gst_omx_port_allocate_buffers (self->enc_in_port) != OMX_ErrorNone)
@@ -2621,6 +2726,9 @@ gst_omx_video_enc_allocate_in_buffers (GstOMXVideoEnc * self)
         return FALSE;
       break;
     case GST_OMX_BUFFER_ALLOCATION_USE_BUFFER:
+      if(gst_omx_port_use_buffers(self->enc_in_port, NULL) != OMX_ErrorNone)
+        return FALSE;
+      break;
     default:
       /* Not supported */
       g_return_val_if_reached (FALSE);
@@ -2685,6 +2793,9 @@ static GstOMXBufferAllocation
 gst_omx_video_enc_pick_input_allocation_mode (GstOMXVideoEnc * self,
     GstBuffer * inbuf)
 {
+  if(self->enc_share_frame_buffer)
+    return GST_OMX_BUFFER_ALLOCATION_USE_BUFFER;
+
   if (!gst_omx_is_dynamic_allocation_supported ())
     return GST_OMX_BUFFER_ALLOCATION_ALLOCATE_BUFFER;
 
@@ -3050,6 +3161,22 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
       gst_omx_port_get_port_definition (self->enc_in_port, &port_def);
     }
   }
+
+  if(self->enc_share_frame_buffer){
+    struct StoreMetaDataInBuffersParams sMetadataMode;
+    GST_OMX_INIT_STRUCT(&sMetadataMode);
+    sMetadataMode.nPortIndex = self->enc_in_port->index;
+    sMetadataMode.bStoreMetaData = OMX_TRUE;
+    GST_DEBUG_OBJECT (self, "set meta mode");
+    if (gst_omx_component_set_parameter(self->enc_in_port->comp,
+      (OMX_INDEXTYPE)OMX_QcomIndexParamVideoMetaBufferMode,
+      (OMX_PTR)&sMetadataMode) != OMX_ErrorNone){
+        GST_ERROR_OBJECT (self, "set meta mode fail");
+        return FALSE;
+    }
+    GST_DEBUG_OBJECT (self, "set meta mode succ");
+  }
+
   self->isubwc = isubwc = gst_omx_caps_has_compression (state->caps, "ubwc");
   negotiation_map =
       gst_omx_video_get_supported_colorformats (self->enc_in_port,
@@ -3351,6 +3478,10 @@ gst_omx_video_enc_semi_planar_manual_copy (GstOMXVideoEnc * self,
   return TRUE;
 }
 
+
+#define SIG_OF_QVMETA(vmeta)  (unsigned int)((vmeta)->offset[2])
+#define FD_OF_QVMETA(vmeta)   (int)((vmeta)->stride[2])
+
 static gboolean
 gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     GstOMXBuffer * outbuf)
@@ -3362,6 +3493,59 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
   GstVideoFrame frame;
   GstVideoMeta *meta = gst_buffer_get_video_meta (inbuf);
   gint stride = meta ? meta->stride[0] : info->stride[0];
+
+  GST_LOG_OBJECT (self, "enc receive gst inbuf %p, PTS %" GST_TIME_FORMAT ", self->enc_share_frame_buffer flag %d", inbuf, GST_TIME_ARGS(GST_BUFFER_PTS(inbuf)), self->enc_share_frame_buffer);
+  if(self->enc_share_frame_buffer) {
+    OMX_S32 nFds = 1;
+    OMX_S32 nInts = 3;
+    GstVideoMeta *QVMeta = meta;
+    gsize offset = 0;
+    gsize maxsize = 0;
+    gsize size = 0;
+    int data_fd = -1;
+    MetaBuffer *pMetaBuffer = (MetaBuffer *)(outbuf->omx_buf->pBuffer);
+    NativeHandle* pMetaHandle = NULL;
+    if (!pMetaBuffer) {
+      GST_ERROR_OBJECT (self, "pMetaBuffer is NULL, fail encoding. Enc sharing frame buf from upstream must enable omx metamode!");
+      return FALSE;
+    }
+    pMetaHandle = pMetaBuffer->meta_handle;
+    if (!pMetaHandle) {
+      GST_ERROR_OBJECT (self, "pMetaHandle is NULL, fail encoding. Enc sharing frame buf from upstream must enable omx metamode!");
+      return FALSE;
+    }
+    g_warn_if_fail((outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed || outbuf->port->port_def.format.video.eColorFormat == OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m/*same as QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m*/) && "Enc share-buffer only support VPU nv12 and nv12_ubwc fmt!");
+
+    if (QVMeta && SIG_OF_QVMETA(QVMeta) == GST_MAKE_FOURCC('Q','a','U','T')) {
+      data_fd = FD_OF_QVMETA(QVMeta);
+      GST_LOG_OBJECT (self, "found QaUT signature on input frame gstbuf %p, GstVideoMeta %p, data fd %d", inbuf, QVMeta, data_fd);
+    }else if (gst_buffer_n_memory (inbuf) && gst_is_dmabuf_memory (gst_buffer_peek_memory (inbuf, 0))){
+      //GST DMABuf approach
+      GstMemory * gstmem = gst_buffer_get_memory (inbuf, 0);
+      data_fd = gst_dmabuf_memory_get_fd (gstmem);
+      GST_LOG_OBJECT (self, "found dmabuf fd on input frame gstbuf %p, gst memory %p, data fd %d", inbuf, gstmem, data_fd);
+      gst_memory_unref (gstmem);
+    }else{
+      GST_ERROR_OBJECT (self, "Couldn't directly reuse pixel memory of gstbuf %p from upstream, fail encoding.", inbuf);
+      return FALSE;
+    }
+
+    size = gst_buffer_get_sizes(inbuf, &offset, &maxsize);
+    pMetaHandle->version = sizeof(NativeHandle);
+    pMetaHandle->numFds = nFds;
+    pMetaHandle->numInts = nInts;
+    pMetaHandle->data[0] = data_fd;  //TODO: using dup() and close(dupfd) is better, because this fd's lifetime for encoding probably exceeds lifetime of gstbuf allocated by upstream plugin.
+    pMetaHandle->data[1] = 0; //offset
+    pMetaHandle->data[2] = maxsize > size ? maxsize: size;
+    pMetaHandle->data[3] = ITUR601; //TODO: will investigate this parameter's impact later
+    if (outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed){
+      pMetaHandle->data[3] |= PRIV_FLAGS_UBWC_ALIGNED;
+    }
+    pMetaBuffer->buffer_type = CameraSource;
+    GST_DEBUG_OBJECT (self, "fill meta buffer, buffer data fd %d, size %d, max size %d, data[2] %d\n", data_fd, size, maxsize, pMetaHandle->data[2]);
+    ret = TRUE;
+    goto done;
+  }
 
   if (info->width != port_def->format.video.nFrameWidth ||
       GST_VIDEO_INFO_FIELD_HEIGHT (info) !=
