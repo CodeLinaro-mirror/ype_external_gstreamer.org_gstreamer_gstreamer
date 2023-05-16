@@ -3657,28 +3657,39 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     gsize offset = 0;
     gsize maxsize = 0;
     gsize size = 0;
-    GST_DEBUG_OBJECT (self, "QVMeta %p", QVMeta);
+    int data_fd = -1;
     MetaBuffer *pMetaBuffer = (MetaBuffer *)(outbuf->omx_buf->pBuffer);
     NativeHandle* pMetaHandle = NULL;
-    if (!QVMeta || !pMetaBuffer) {
-      GST_ERROR_OBJECT (self, "QVMeta %p pMetaBuffer %p", QVMeta, pMetaBuffer);
-      return FALSE;
-    }
-    if (SIG_OF_QVMETA(QVMeta) != GST_MAKE_FOURCC('Q','a','U','T')) {
-      GST_ERROR_OBJECT (self, "Not found QaUT signature on input frame gstbuf %p GstVideoMeta %p, couldn't share frame buf", inbuf, QVMeta);
+    if (!pMetaBuffer) {
+      GST_ERROR_OBJECT (self, "pMetaBuffer is NULL, fail encoding. Enc sharing frame buf from upstream must enable omx metamode!");
       return FALSE;
     }
     pMetaHandle = pMetaBuffer->meta_handle;
     if (!pMetaHandle) {
-      GST_ERROR_OBJECT (self, "pMetaHandle is NULL");
+      GST_ERROR_OBJECT (self, "pMetaHandle is NULL, fail encoding. Enc sharing frame buf from upstream must enable omx metamode!");
       return FALSE;
     }
     g_warn_if_fail((outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed || outbuf->port->port_def.format.video.eColorFormat == OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m/*same as QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m*/) && "Enc share-buffer only support VPU nv12 and nv12_ubwc fmt!");
+
+    if (QVMeta && SIG_OF_QVMETA(QVMeta) == GST_MAKE_FOURCC('Q','a','U','T')) {
+      data_fd = FD_OF_QVMETA(QVMeta);
+      GST_LOG_OBJECT (self, "found QaUT signature on input frame gstbuf %p, GstVideoMeta %p, data fd %d", inbuf, QVMeta, data_fd);
+    }else if (gst_buffer_n_memory (inbuf) && gst_is_dmabuf_memory (gst_buffer_peek_memory (inbuf, 0))){
+      //GST DMABuf approach
+      GstMemory * gstmem = gst_buffer_get_memory (inbuf, 0);
+      data_fd = gst_dmabuf_memory_get_fd (gstmem);
+      GST_LOG_OBJECT (self, "found dmabuf fd on input frame gstbuf %p, gst memory %p, data fd %d", inbuf, gstmem, data_fd);
+      gst_memory_unref (gstmem);
+    }else{
+      GST_ERROR_OBJECT (self, "Couldn't directly reuse pixel memory of gstbuf %p from upstream, fail encoding.", inbuf);
+      return FALSE;
+    }
+
     size = gst_buffer_get_sizes(inbuf, &offset, &maxsize);
     pMetaHandle->version = sizeof(NativeHandle);
     pMetaHandle->numFds = nFds;
     pMetaHandle->numInts = nInts;
-    pMetaHandle->data[0] = FD_OF_QVMETA(QVMeta);
+    pMetaHandle->data[0] = data_fd;  //TODO: using dup() and close(dupfd) is better, because this fd's lifetime for encoding probably exceeds lifetime of gstbuf allocated by upstream plugin.
     pMetaHandle->data[1] = 0; //offset
     pMetaHandle->data[2] = maxsize > size ? maxsize: size;
     pMetaHandle->data[3] = ITUR601; //TODO: will investigate this parameter's impact later
@@ -3686,7 +3697,7 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
       pMetaHandle->data[3] |= PRIV_FLAGS_UBWC_ALIGNED;
     }
     pMetaBuffer->buffer_type = CameraSource;
-    GST_DEBUG_OBJECT (self, "fill meta buffer, buffer data fd %d, size %d, max size %d, data[2] %d\n", (int)(pMetaHandle->data[0]), size, maxsize, pMetaHandle->data[2]);
+    GST_DEBUG_OBJECT (self, "fill meta buffer, buffer data fd %d, size %d, max size %d, data[2] %d\n", data_fd, size, maxsize, pMetaHandle->data[2]);
     ret = TRUE;
     goto done;
   }
