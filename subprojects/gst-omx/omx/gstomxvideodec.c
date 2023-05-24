@@ -1786,6 +1786,32 @@ add_caps_gl_memory_feature (GstCaps * caps)
 }
 #endif
 
+static void
+add_caps_dmabuf_memory_feature (GstCaps * caps)
+{
+  GstCapsFeatures *old, *features;
+
+  features = gst_caps_features_new_empty ();
+  old = gst_caps_get_features (caps, 0);
+
+  if (old) {
+    guint i;
+
+    /* Copy the existing features ignoring memory ones as we are changing
+     * it to DMABuf. */
+    for (i = 0; i < gst_caps_features_get_size (old); i++) {
+      const gchar *f = gst_caps_features_get_nth (old, i);
+
+      if (!g_str_has_prefix (f, "memory:"))
+        gst_caps_features_add (features, f);
+    }
+  }
+
+  gst_caps_features_add (features, GST_CAPS_FEATURE_MEMORY_DMABUF);
+  gst_caps_set_features (caps, 0, features);
+}
+
+
 static OMX_ERRORTYPE
 gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
 {
@@ -2054,6 +2080,18 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
       gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER (self),
       format, interlace_mode, rect.nWidth,
       rect.nHeight, self->input_state);
+
+  /* add dmabuf memory and compression caps features */
+  if (state->caps)
+    gst_caps_unref (state->caps);
+  state->caps = gst_video_info_to_caps (&state->info);
+  add_caps_dmabuf_memory_feature (state->caps);
+  if (self->isubwc)
+    gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+        "ubwc", NULL);
+  else
+    gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+        "linear", NULL);
 
   if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
     gst_video_codec_state_unref (state);
@@ -2394,6 +2432,18 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
           gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER
           (self), format, interlace_mode, rect.nWidth,
           rect.nHeight, self->input_state);
+
+      /* add dmabuf memory and compression caps features */
+      if (state->caps)
+        gst_caps_unref (state->caps);
+      state->caps = gst_video_info_to_caps (&state->info);
+      add_caps_dmabuf_memory_feature (state->caps);
+      if (self->isubwc)
+        gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+            "ubwc", NULL);
+      else
+        gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+            "linear", NULL);
 
       /* Take framerate and pixel-aspect-ratio from sinkpad caps */
 
