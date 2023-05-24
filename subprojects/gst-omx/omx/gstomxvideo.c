@@ -184,7 +184,7 @@ gst_omx_video_get_caps_for_map (GList * map)
         gst_structure_new ("video/x-raw",
             "format", G_TYPE_STRING,
             gst_video_format_to_string (entry->format),
-            "compression", G_TYPE_STRING,"ubwc", NULL));
+            "compression", G_TYPE_STRING, "ubwc", NULL));
       size = gst_caps_get_size (caps);
       gst_caps_set_features (caps, size - 1,
       gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF));
@@ -193,6 +193,15 @@ gst_omx_video_get_caps_for_map (GList * map)
         gst_structure_new ("video/x-raw",
             "format", G_TYPE_STRING,
             gst_video_format_to_string (entry->format), NULL));
+
+      gst_caps_append_structure (caps,
+        gst_structure_new ("video/x-raw",
+            "format", G_TYPE_STRING,
+            gst_video_format_to_string (entry->format),
+            "compression", G_TYPE_STRING, "linear", NULL));
+      size = gst_caps_get_size (caps);
+      gst_caps_set_features (caps, size - 1,
+      gst_caps_features_from_string (GST_CAPS_FEATURE_MEMORY_DMABUF));
     }
   }
   return caps;
