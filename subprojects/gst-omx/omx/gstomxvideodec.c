@@ -365,6 +365,7 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
 {
   GstVideoCodecState *state;
   GstVideoInfo *vinfo;
+  GstVideoMeta *vmeta;
   OMX_QCOM_PLATFORM_PRIVATE_PMEM_INFO *pPMEMInfo = NULL;
   if (pBuffer == NULL)
     return FALSE;
@@ -409,6 +410,56 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
   //Therefore, if already attached modifier, needn't update or re-attach it.
   if (!gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (out_buf), gst_fbuf_modifier_qdata_quark())) {
     attach_new_modifier(dec, out_buf, vinfo, pPMEMInfo);
+  }
+
+  /* for ubwc ouput the offset[1] is set at the start of UV_Meta_Plane */
+  vmeta = gst_buffer_get_video_meta (out_buf);
+  if (vmeta) {
+    guint y_stride = 0,y_sclines = 0;
+    guint y_ubwc_plane = 0;
+    guint y_meta_stride = 0, y_meta_scanlines = 0;
+    guint y_meta_plane = 0;
+
+    if (GST_VIDEO_INFO_FORMAT (vinfo) == GST_VIDEO_FORMAT_NV12_10LE32) {
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      /* there are two layouts for non-32 10bit bitstream:  pic_height_in_luma_sample 32-aligned
+       * and 16-aligned. here the actual aligned FrameHeight format.video.nFrameHeight instead
+       * of GST_VIDEO_INFO_HEIGHT (vinfo) need be used for calculating y_sclines */
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC,
+        dec->dec_out_port->port_def.format.video.nFrameHeight);
+      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_meta_scanlines =
+        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_HEIGHT (vinfo));
+      y_meta_plane = MSM_MEDIA_ALIGN(y_meta_stride * y_meta_scanlines, 4096);
+      y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
+
+      vmeta->offset[1] = y_meta_plane + y_ubwc_plane;
+
+      GST_LOG_OBJECT (dec,
+        "TP10_UBWC Output WxH : %dx%d Frame WxH : %dx%d Offset[1](start of UV_Meta_Plane) : 0x%x\n",
+        GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo),
+        dec->dec_out_port->port_def.format.video.nFrameWidth,
+        dec->dec_out_port->port_def.format.video.nFrameHeight,
+        vmeta->offset[1]);
+    } else if (GST_VIDEO_INFO_FORMAT (vinfo) == GST_VIDEO_FORMAT_NV12 && dec->isubwc) {
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC,
+        dec->dec_out_port->port_def.format.video.nFrameHeight);
+      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_meta_scanlines =
+        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_HEIGHT (vinfo));
+      y_meta_plane = MSM_MEDIA_ALIGN(y_meta_stride * y_meta_scanlines, 4096);
+      y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
+
+      vmeta->offset[1] = y_meta_plane + y_ubwc_plane;
+
+      GST_LOG_OBJECT (dec,
+        "NV12_UBWC Output WxH : %dx%d Frame WxH : %dx%d Offset[1](start of UV_Meta_Plane) : 0x%x\n",
+        GST_VIDEO_INFO_WIDTH (vinfo), GST_VIDEO_INFO_HEIGHT (vinfo),
+        dec->dec_out_port->port_def.format.video.nFrameWidth,
+        dec->dec_out_port->port_def.format.video.nFrameHeight,
+        vmeta->offset[1]);
+    }
   }
 #endif
 
