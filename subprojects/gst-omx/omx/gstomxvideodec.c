@@ -3022,7 +3022,14 @@ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
     return FALSE;
   }
 
-  self->isubwc = isubwc = gst_omx_caps_has_compression (intersection, "ubwc");
+  /* in negotiation intersetion format is NV12 for all
+   * bitstream(8-bit and 10-bit), the correct format would be gotten in
+   * reconfiguration. here the workaround: 10-bit decoder output is set as
+   * P010 defaultly since we have TP10_UBWC 16/32 alignment issue */
+  if (self->is10bit && gst_video_format_from_string (format_str) == GST_VIDEO_FORMAT_NV12)
+    self->isubwc = isubwc = 0;
+  else
+    self->isubwc = isubwc = gst_omx_caps_has_compression (intersection, "ubwc");
 
   GST_OMX_INIT_STRUCT (&param);
   param.nPortIndex = self->dec_out_port->index;

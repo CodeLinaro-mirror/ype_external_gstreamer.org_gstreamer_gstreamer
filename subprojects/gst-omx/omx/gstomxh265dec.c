@@ -200,6 +200,7 @@ gst_omx_h265_dec_set_format (GstOMXVideoDec * dec, GstOMXPort * port,
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
   OMX_ERRORTYPE err;
   const GstStructure *s;
+  const gchar *profile_string = NULL;
 
   gst_omx_port_get_port_definition (port, &port_def);
   port_def.format.video.eCompressionFormat =
@@ -220,5 +221,17 @@ gst_omx_h265_dec_set_format (GstOMXVideoDec * dec, GstOMXPort * port,
     gst_video_decoder_set_subframe_mode (GST_VIDEO_DECODER (dec), TRUE);
   }
 
+  GST_DEBUG_OBJECT (dec, "state caps: %" GST_PTR_FORMAT,
+      state->caps);
+
+  profile_string = gst_structure_get_string (s, "profile");
+  if (!profile_string) {
+    GST_DEBUG_OBJECT (dec, "no profile field in caps");
+  } else {
+    GST_DEBUG_OBJECT (dec, "profile:%s", profile_string);
+    if (!g_strcmp0 (profile_string, "main-10")) {
+      dec->is10bit = TRUE;
+    }
+  }
   return TRUE;
 }
