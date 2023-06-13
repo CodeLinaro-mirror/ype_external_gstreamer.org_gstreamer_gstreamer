@@ -36,7 +36,7 @@ static const H264ProfileMapping h264_profiles[] = {
   {"constrained-baseline",
       (OMX_VIDEO_AVCPROFILETYPE) OMX_ALG_VIDEO_AVCProfileConstrainedBaseline},
 #else
-  {"constrained-baseline", OMX_VIDEO_AVCProfileBaseline},
+  {"constrained-baseline", OMX_VIDEO_AVCProfileConstrainedBaseline},
 #endif
   {"main", OMX_VIDEO_AVCProfileMain},
   {"high", OMX_VIDEO_AVCProfileHigh},
