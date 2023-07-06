@@ -419,17 +419,18 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
     guint y_ubwc_plane = 0;
     guint y_meta_stride = 0, y_meta_scanlines = 0;
     guint y_meta_plane = 0;
+    guint frame_width = dec->dec_out_port->port_def.format.video.nFrameWidth;
+    guint frame_height = dec->dec_out_port->port_def.format.video.nFrameHeight;
 
     if (GST_VIDEO_INFO_FORMAT (vinfo) == GST_VIDEO_FORMAT_NV12_10LE32) {
-      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, frame_width);
       /* there are two layouts for non-32 10bit bitstream:  pic_height_in_luma_sample 32-aligned
        * and 16-aligned. here the actual aligned FrameHeight format.video.nFrameHeight instead
        * of GST_VIDEO_INFO_HEIGHT (vinfo) need be used for calculating y_sclines */
-      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC,
-        dec->dec_out_port->port_def.format.video.nFrameHeight);
-      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, frame_height);
+      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, frame_width);
       y_meta_scanlines =
-        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_HEIGHT (vinfo));
+        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, frame_height);
       y_meta_plane = MSM_MEDIA_ALIGN(y_meta_stride * y_meta_scanlines, 4096);
       y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
 
@@ -442,12 +443,11 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
         dec->dec_out_port->port_def.format.video.nFrameHeight,
         vmeta->offset[1]);
     } else if (GST_VIDEO_INFO_FORMAT (vinfo) == GST_VIDEO_FORMAT_NV12 && dec->isubwc) {
-      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
-      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC,
-        dec->dec_out_port->port_def.format.video.nFrameHeight);
-      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, frame_width);
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC, frame_height);
+      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_UBWC, frame_width);
       y_meta_scanlines =
-        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_HEIGHT (vinfo));
+        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_UBWC, frame_height);
       y_meta_plane = MSM_MEDIA_ALIGN(y_meta_stride * y_meta_scanlines, 4096);
       y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
 
