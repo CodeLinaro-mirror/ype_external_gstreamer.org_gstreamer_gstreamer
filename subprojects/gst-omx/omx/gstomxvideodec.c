@@ -615,54 +615,54 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
 
 #ifdef USE_GBM
-     self->gbm_dev_fd = -1;
-     self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
-     GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
-     if (self->gbm_lib == NULL) {
-      GST_ERROR("dlopen libgbm.so failed");
-      return;
-     }
-     self->gbm_api_create_device = dlsym(self->gbm_lib, "gbm_create_device");
-     self->gbm_api_device_destroy = dlsym(self->gbm_lib, "gbm_device_destroy");
-     self->gbm_api_bo_import = dlsym(self->gbm_lib, "gbm_bo_import");
-     self->gbm_api_bo_destroy = dlsym(self->gbm_lib, "gbm_bo_destroy");
-     self->gbm_api_bo_get_modifier = dlsym(self->gbm_lib, "gbm_bo_get_modifier");
-     GST_INFO("gbm APIs are create_dev:%p dev_destroy:%p bo_import:%p bo_destroy:%p bo_get_modifier:%p", self->gbm_api_create_device, self->gbm_api_device_destroy, self->gbm_api_bo_import, self->gbm_api_bo_destroy, self->gbm_api_bo_get_modifier);
-     if (!self->gbm_api_create_device || !self->gbm_api_device_destroy || !self->gbm_api_bo_import || !self->gbm_api_bo_destroy || !self->gbm_api_bo_get_modifier) {
-      GST_ERROR("failed as some gbm APIs are null");
-      dlclose(self->gbm_lib);
-      self->gbm_lib = NULL;
-      return;
-     }
+  self->gbm_dev_fd = -1;
+  self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
+  GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
+  if (self->gbm_lib == NULL) {
+    GST_ERROR("dlopen libgbm.so failed");
+    return;
+  }
+  self->gbm_api_create_device = dlsym(self->gbm_lib, "gbm_create_device");
+  self->gbm_api_device_destroy = dlsym(self->gbm_lib, "gbm_device_destroy");
+  self->gbm_api_bo_import = dlsym(self->gbm_lib, "gbm_bo_import");
+  self->gbm_api_bo_destroy = dlsym(self->gbm_lib, "gbm_bo_destroy");
+  self->gbm_api_bo_get_modifier = dlsym(self->gbm_lib, "gbm_bo_get_modifier");
+  GST_INFO("gbm APIs are create_dev:%p dev_destroy:%p bo_import:%p bo_destroy:%p bo_get_modifier:%p", self->gbm_api_create_device, self->gbm_api_device_destroy, self->gbm_api_bo_import, self->gbm_api_bo_destroy, self->gbm_api_bo_get_modifier);
+  if (!self->gbm_api_create_device || !self->gbm_api_device_destroy || !self->gbm_api_bo_import || !self->gbm_api_bo_destroy || !self->gbm_api_bo_get_modifier) {
+    GST_ERROR("failed as some gbm APIs are null");
+    dlclose(self->gbm_lib);
+    self->gbm_lib = NULL;
+    return;
+  }
 #define GBMDEV_DEVICE_NODE "/dev/dri/renderD128"
-     self->gbm_dev_fd = open(GBMDEV_DEVICE_NODE, O_RDWR | O_CLOEXEC);
-     GST_INFO("open gbm device fd, ret fd %d", self->gbm_dev_fd);
-     if (self->gbm_dev_fd < 0) {
-       GST_ERROR("open gbm device fd %s failed, ret fd %d", GBMDEV_DEVICE_NODE, self->gbm_dev_fd);
-       self->gbm_api_create_device = NULL;
-       self->gbm_api_device_destroy = NULL;
-       self->gbm_api_bo_import = NULL;
-       self->gbm_api_bo_destroy = NULL;
-       self->gbm_api_bo_get_modifier = NULL;
-       dlclose(self->gbm_lib);
-       self->gbm_lib = NULL;
-       return;
-     }
-     self->gbm_dev = self->gbm_api_create_device(self->gbm_dev_fd);
-     GST_INFO("gbm create device from fd %d, return device %p", self->gbm_dev_fd, self->gbm_dev);
-     if (self->gbm_dev == NULL) {
-       GST_ERROR("gbm create device failed, fd %d, ret NULL", self->gbm_dev_fd);
-       close(self->gbm_dev_fd);
-       self->gbm_dev_fd = -1;
-       self->gbm_api_create_device = NULL;
-       self->gbm_api_device_destroy = NULL;
-       self->gbm_api_bo_import = NULL;
-       self->gbm_api_bo_destroy = NULL;
-       self->gbm_api_bo_get_modifier = NULL;
-       dlclose(self->gbm_lib);
-       self->gbm_lib = NULL;
-       return;
-     }
+  self->gbm_dev_fd = open(GBMDEV_DEVICE_NODE, O_RDWR | O_CLOEXEC);
+  GST_INFO("open gbm device fd, ret fd %d", self->gbm_dev_fd);
+  if (self->gbm_dev_fd < 0) {
+    GST_ERROR("open gbm device fd %s failed, ret fd %d", GBMDEV_DEVICE_NODE, self->gbm_dev_fd);
+    self->gbm_api_create_device = NULL;
+    self->gbm_api_device_destroy = NULL;
+    self->gbm_api_bo_import = NULL;
+    self->gbm_api_bo_destroy = NULL;
+    self->gbm_api_bo_get_modifier = NULL;
+    dlclose(self->gbm_lib);
+    self->gbm_lib = NULL;
+    return;
+  }
+  self->gbm_dev = self->gbm_api_create_device(self->gbm_dev_fd);
+  GST_INFO("gbm create device from fd %d, return device %p", self->gbm_dev_fd, self->gbm_dev);
+  if (self->gbm_dev == NULL) {
+    GST_ERROR("gbm create device failed, fd %d, ret NULL", self->gbm_dev_fd);
+    close(self->gbm_dev_fd);
+    self->gbm_dev_fd = -1;
+    self->gbm_api_create_device = NULL;
+    self->gbm_api_device_destroy = NULL;
+    self->gbm_api_bo_import = NULL;
+    self->gbm_api_bo_destroy = NULL;
+    self->gbm_api_bo_get_modifier = NULL;
+    dlclose(self->gbm_lib);
+    self->gbm_lib = NULL;
+    return;
+  }
 #endif
 }
 
