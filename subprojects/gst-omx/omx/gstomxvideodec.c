@@ -2133,6 +2133,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
       format, interlace_mode, rect.nWidth,
       rect.nHeight, self->input_state);
 
+  g_assert(state);
   /* add dmabuf memory and compression caps features */
   if (state->caps)
     gst_caps_unref (state->caps);
@@ -2485,6 +2486,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
           (self), format, interlace_mode, rect.nWidth,
           rect.nHeight, self->input_state);
 
+      g_assert(state);
       /* add dmabuf memory and compression caps features */
       if (state->caps)
         gst_caps_unref (state->caps);
