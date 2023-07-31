@@ -102,11 +102,13 @@ enum
   PROP_INTERNAL_ENTROPY_BUFFERS,
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
+  PROP_DEINTERLACE,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
 #define GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT          (FALSE)
+#define GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT          (TRUE)
 
 /* class initialization */
 
@@ -488,6 +490,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_LOW_LATENCY:
       self->low_latency_mode = g_value_get_boolean (value);
       break;
+    case PROP_DEINTERLACE:
+      self->deinterlace_mode = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -511,6 +516,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_LOW_LATENCY:
       g_value_set_boolean (value, self->low_latency_mode);
+      break;
+    case PROP_DEINTERLACE:
+      g_value_set_boolean (value, self->deinterlace_mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -551,6 +559,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
       g_param_spec_boolean ("low-latency-mode", "Low latency mode",
           "If enabled, decoder should be in low latency mode",
           GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_DEINTERLACE,
+      g_param_spec_boolean ("deinterlace", "deinterlace output mode",
+          "If disable, decoder output should not be deinterlaced",
+          GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -613,6 +628,8 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   g_cond_init (&self->drain_cond);
   self->output_picture_order_mode = GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
   self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
+  self->deinterlace_mode = GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT;
+
 
 #ifdef USE_GBM
   self->gbm_dev_fd = -1;
@@ -850,6 +867,23 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
     if (err != OMX_ErrorNone) {
       GST_ERROR_OBJECT (self, "Failed to set low latency mode: %s (0x%08x)",
           gst_omx_error_to_string (err), err);
+    }
+  }
+
+  if (!self->deinterlace_mode) {
+    OMX_ERRORTYPE err;
+    OMX_VENDOR_DEINTERLACE param;
+
+    GST_OMX_INIT_STRUCT (&param);
+    param.nSize = sizeof(OMX_VENDOR_DEINTERLACE);
+    param.nDeinterlace = 0;
+    err = gst_omx_component_set_config (self->dec, OMX_IndexVendorVideoDeinterlace, (OMX_PTR)&param);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+        "Failed to SET deinterlace mode: %s (0x%08x)",
+        gst_omx_error_to_string (err), err);
+    } else {
+      GST_INFO_OBJECT(self, "deinterlace mode: %d", param.nDeinterlace);
     }
   }
 
