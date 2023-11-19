@@ -346,9 +346,9 @@ if have_omx_hevc
   cdata.set('HAVE_HEVC', 1)
 endif
 
-if gstgl_dep.found()
-  cdata.set ('HAVE_GST_GL', 1)
-endif
+#if gstgl_dep.found()
+#  cdata.set ('HAVE_GST_GL', 1)
+#endif
 
 if x11_dep.found()
   cdata.set ('HAVE_X11', 1)
