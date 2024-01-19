@@ -102,11 +102,13 @@ enum
   PROP_INTERNAL_ENTROPY_BUFFERS,
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
+  PROP_DEINTERLACE,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
 #define GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT          (FALSE)
+#define GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT          (TRUE)
 
 /* class initialization */
 
@@ -419,17 +421,18 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
     guint y_ubwc_plane = 0;
     guint y_meta_stride = 0, y_meta_scanlines = 0;
     guint y_meta_plane = 0;
+    guint frame_width = dec->dec_out_port->port_def.format.video.nFrameWidth;
+    guint frame_height = dec->dec_out_port->port_def.format.video.nFrameHeight;
 
     if (GST_VIDEO_INFO_FORMAT (vinfo) == GST_VIDEO_FORMAT_NV12_10LE32) {
-      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, frame_width);
       /* there are two layouts for non-32 10bit bitstream:  pic_height_in_luma_sample 32-aligned
        * and 16-aligned. here the actual aligned FrameHeight format.video.nFrameHeight instead
        * of GST_VIDEO_INFO_HEIGHT (vinfo) need be used for calculating y_sclines */
-      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC,
-        dec->dec_out_port->port_def.format.video.nFrameHeight);
-      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, frame_height);
+      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, frame_width);
       y_meta_scanlines =
-        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_HEIGHT (vinfo));
+        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC, frame_height);
       y_meta_plane = MSM_MEDIA_ALIGN(y_meta_stride * y_meta_scanlines, 4096);
       y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
 
@@ -442,12 +445,11 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
         dec->dec_out_port->port_def.format.video.nFrameHeight,
         vmeta->offset[1]);
     } else if (GST_VIDEO_INFO_FORMAT (vinfo) == GST_VIDEO_FORMAT_NV12 && dec->isubwc) {
-      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
-      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC,
-        dec->dec_out_port->port_def.format.video.nFrameHeight);
-      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_WIDTH (vinfo));
+      y_stride = VENUS_Y_STRIDE(COLOR_FMT_NV12_UBWC, frame_width);
+      y_sclines = VENUS_Y_SCANLINES(COLOR_FMT_NV12_UBWC, frame_height);
+      y_meta_stride = VENUS_Y_META_STRIDE(COLOR_FMT_NV12_UBWC, frame_width);
       y_meta_scanlines =
-        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_UBWC, GST_VIDEO_INFO_HEIGHT (vinfo));
+        VENUS_Y_META_SCANLINES(COLOR_FMT_NV12_UBWC, frame_height);
       y_meta_plane = MSM_MEDIA_ALIGN(y_meta_stride * y_meta_scanlines, 4096);
       y_ubwc_plane = MSM_MEDIA_ALIGN(y_stride * y_sclines, 4096);
 
@@ -488,6 +490,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_LOW_LATENCY:
       self->low_latency_mode = g_value_get_boolean (value);
       break;
+    case PROP_DEINTERLACE:
+      self->deinterlace_mode = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -511,6 +516,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_LOW_LATENCY:
       g_value_set_boolean (value, self->low_latency_mode);
+      break;
+    case PROP_DEINTERLACE:
+      g_value_set_boolean (value, self->deinterlace_mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -551,6 +559,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
       g_param_spec_boolean ("low-latency-mode", "Low latency mode",
           "If enabled, decoder should be in low latency mode",
           GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_DEINTERLACE,
+      g_param_spec_boolean ("deinterlace", "deinterlace output mode",
+          "If disable, decoder output should not be deinterlaced",
+          GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -613,56 +628,58 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   g_cond_init (&self->drain_cond);
   self->output_picture_order_mode = GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
   self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
+  self->deinterlace_mode = GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT;
+
 
 #ifdef USE_GBM
-     self->gbm_dev_fd = -1;
-     self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
-     GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
-     if (self->gbm_lib == NULL) {
-      GST_ERROR("dlopen libgbm.so failed");
-      return;
-     }
-     self->gbm_api_create_device = dlsym(self->gbm_lib, "gbm_create_device");
-     self->gbm_api_device_destroy = dlsym(self->gbm_lib, "gbm_device_destroy");
-     self->gbm_api_bo_import = dlsym(self->gbm_lib, "gbm_bo_import");
-     self->gbm_api_bo_destroy = dlsym(self->gbm_lib, "gbm_bo_destroy");
-     self->gbm_api_bo_get_modifier = dlsym(self->gbm_lib, "gbm_bo_get_modifier");
-     GST_INFO("gbm APIs are create_dev:%p dev_destroy:%p bo_import:%p bo_destroy:%p bo_get_modifier:%p", self->gbm_api_create_device, self->gbm_api_device_destroy, self->gbm_api_bo_import, self->gbm_api_bo_destroy, self->gbm_api_bo_get_modifier);
-     if (!self->gbm_api_create_device || !self->gbm_api_device_destroy || !self->gbm_api_bo_import || !self->gbm_api_bo_destroy || !self->gbm_api_bo_get_modifier) {
-      GST_ERROR("failed as some gbm APIs are null");
-      dlclose(self->gbm_lib);
-      self->gbm_lib = NULL;
-      return;
-     }
+  self->gbm_dev_fd = -1;
+  self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
+  GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
+  if (self->gbm_lib == NULL) {
+    GST_ERROR("dlopen libgbm.so failed");
+    return;
+  }
+  self->gbm_api_create_device = dlsym(self->gbm_lib, "gbm_create_device");
+  self->gbm_api_device_destroy = dlsym(self->gbm_lib, "gbm_device_destroy");
+  self->gbm_api_bo_import = dlsym(self->gbm_lib, "gbm_bo_import");
+  self->gbm_api_bo_destroy = dlsym(self->gbm_lib, "gbm_bo_destroy");
+  self->gbm_api_bo_get_modifier = dlsym(self->gbm_lib, "gbm_bo_get_modifier");
+  GST_INFO("gbm APIs are create_dev:%p dev_destroy:%p bo_import:%p bo_destroy:%p bo_get_modifier:%p", self->gbm_api_create_device, self->gbm_api_device_destroy, self->gbm_api_bo_import, self->gbm_api_bo_destroy, self->gbm_api_bo_get_modifier);
+  if (!self->gbm_api_create_device || !self->gbm_api_device_destroy || !self->gbm_api_bo_import || !self->gbm_api_bo_destroy || !self->gbm_api_bo_get_modifier) {
+    GST_ERROR("failed as some gbm APIs are null");
+    dlclose(self->gbm_lib);
+    self->gbm_lib = NULL;
+    return;
+  }
 #define GBMDEV_DEVICE_NODE "/dev/dri/renderD128"
-     self->gbm_dev_fd = open(GBMDEV_DEVICE_NODE, O_RDWR | O_CLOEXEC);
-     GST_INFO("open gbm device fd, ret fd %d", self->gbm_dev_fd);
-     if (self->gbm_dev_fd < 0) {
-       GST_ERROR("open gbm device fd %s failed, ret fd %d", GBMDEV_DEVICE_NODE, self->gbm_dev_fd);
-       self->gbm_api_create_device = NULL;
-       self->gbm_api_device_destroy = NULL;
-       self->gbm_api_bo_import = NULL;
-       self->gbm_api_bo_destroy = NULL;
-       self->gbm_api_bo_get_modifier = NULL;
-       dlclose(self->gbm_lib);
-       self->gbm_lib = NULL;
-       return;
-     }
-     self->gbm_dev = self->gbm_api_create_device(self->gbm_dev_fd);
-     GST_INFO("gbm create device from fd %d, return device %p", self->gbm_dev_fd, self->gbm_dev);
-     if (self->gbm_dev == NULL) {
-       GST_ERROR("gbm create device failed, fd %d, ret NULL", self->gbm_dev_fd);
-       close(self->gbm_dev_fd);
-       self->gbm_dev_fd = -1;
-       self->gbm_api_create_device = NULL;
-       self->gbm_api_device_destroy = NULL;
-       self->gbm_api_bo_import = NULL;
-       self->gbm_api_bo_destroy = NULL;
-       self->gbm_api_bo_get_modifier = NULL;
-       dlclose(self->gbm_lib);
-       self->gbm_lib = NULL;
-       return;
-     }
+  self->gbm_dev_fd = open(GBMDEV_DEVICE_NODE, O_RDWR | O_CLOEXEC);
+  GST_INFO("open gbm device fd, ret fd %d", self->gbm_dev_fd);
+  if (self->gbm_dev_fd < 0) {
+    GST_ERROR("open gbm device fd %s failed, ret fd %d", GBMDEV_DEVICE_NODE, self->gbm_dev_fd);
+    self->gbm_api_create_device = NULL;
+    self->gbm_api_device_destroy = NULL;
+    self->gbm_api_bo_import = NULL;
+    self->gbm_api_bo_destroy = NULL;
+    self->gbm_api_bo_get_modifier = NULL;
+    dlclose(self->gbm_lib);
+    self->gbm_lib = NULL;
+    return;
+  }
+  self->gbm_dev = self->gbm_api_create_device(self->gbm_dev_fd);
+  GST_INFO("gbm create device from fd %d, return device %p", self->gbm_dev_fd, self->gbm_dev);
+  if (self->gbm_dev == NULL) {
+    GST_ERROR("gbm create device failed, fd %d, ret NULL", self->gbm_dev_fd);
+    close(self->gbm_dev_fd);
+    self->gbm_dev_fd = -1;
+    self->gbm_api_create_device = NULL;
+    self->gbm_api_device_destroy = NULL;
+    self->gbm_api_bo_import = NULL;
+    self->gbm_api_bo_destroy = NULL;
+    self->gbm_api_bo_get_modifier = NULL;
+    dlclose(self->gbm_lib);
+    self->gbm_lib = NULL;
+    return;
+  }
 #endif
 }
 
@@ -850,6 +867,23 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
     if (err != OMX_ErrorNone) {
       GST_ERROR_OBJECT (self, "Failed to set low latency mode: %s (0x%08x)",
           gst_omx_error_to_string (err), err);
+    }
+  }
+
+  if (!self->deinterlace_mode) {
+    OMX_ERRORTYPE err;
+    OMX_VENDOR_DEINTERLACE param;
+
+    GST_OMX_INIT_STRUCT (&param);
+    param.nSize = sizeof(OMX_VENDOR_DEINTERLACE);
+    param.nDeinterlace = 0;
+    err = gst_omx_component_set_config (self->dec, OMX_IndexVendorVideoDeinterlace, (OMX_PTR)&param);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+        "Failed to SET deinterlace mode: %s (0x%08x)",
+        gst_omx_error_to_string (err), err);
+    } else {
+      GST_INFO_OBJECT(self, "deinterlace mode: %d", param.nDeinterlace);
     }
   }
 
@@ -2133,6 +2167,7 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
       format, interlace_mode, rect.nWidth,
       rect.nHeight, self->input_state);
 
+  g_assert(state);
   /* add dmabuf memory and compression caps features */
   if (state->caps)
     gst_caps_unref (state->caps);
@@ -2485,6 +2520,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
           (self), format, interlace_mode, rect.nWidth,
           rect.nHeight, self->input_state);
 
+      g_assert(state);
       /* add dmabuf memory and compression caps features */
       if (state->caps)
         gst_caps_unref (state->caps);
@@ -3022,7 +3058,14 @@ gst_omx_video_dec_negotiate (GstOMXVideoDec * self)
     return FALSE;
   }
 
-  self->isubwc = isubwc = gst_omx_caps_has_compression (intersection, "ubwc");
+  /* in negotiation intersetion format is NV12 for all
+   * bitstream(8-bit and 10-bit), the correct format would be gotten in
+   * reconfiguration. here the workaround: 10-bit decoder output is set as
+   * P010 defaultly since we have TP10_UBWC 16/32 alignment issue */
+  if (self->is10bit && gst_video_format_from_string (format_str) == GST_VIDEO_FORMAT_NV12)
+    self->isubwc = isubwc = 0;
+  else
+    self->isubwc = isubwc = gst_omx_caps_has_compression (intersection, "ubwc");
 
   GST_OMX_INIT_STRUCT (&param);
   param.nPortIndex = self->dec_out_port->index;

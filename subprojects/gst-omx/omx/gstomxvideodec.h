@@ -113,6 +113,7 @@ struct _GstOMXVideoDec
 #endif
   guint output_picture_order_mode;
   gboolean low_latency_mode;
+  gboolean deinterlace_mode;
 #ifdef USE_GBM
   void* gbm_lib;
   struct gbm_device * (*gbm_api_create_device)(int fd);
@@ -125,6 +126,7 @@ struct _GstOMXVideoDec
 #endif
 
   gboolean isubwc;
+  gboolean is10bit;
 };
 
 struct _GstOMXVideoDecClass

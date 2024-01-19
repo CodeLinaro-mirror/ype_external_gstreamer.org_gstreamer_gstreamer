@@ -88,7 +88,20 @@ gst_omx_vp9_dec_set_format (GstOMXVideoDec * dec, GstOMXPort * port,
 {
   gboolean ret;
   OMX_PARAM_PORTDEFINITIONTYPE port_def;
+  const GstStructure *s = NULL;
+  guint bit_depth_luma, bit_depth_chroma;
 
+  s = gst_caps_get_structure (state->caps, 0);
+
+  GST_DEBUG_OBJECT (dec, "state caps: %" GST_PTR_FORMAT,
+      state->caps);
+
+  if (s && gst_structure_get_uint (s, "bit-depth-luma", &bit_depth_luma) &&
+      gst_structure_get_uint (s, "bit-depth-chroma", &bit_depth_chroma)) {
+    if (bit_depth_luma == 10 && bit_depth_chroma == 10) {
+      dec->is10bit = TRUE;
+    }
+  }
   gst_omx_port_get_port_definition (port, &port_def);
   port_def.format.video.eCompressionFormat = OMX_VIDEO_CodingVP9;
   ret = gst_omx_port_update_port_definition (port, &port_def) == OMX_ErrorNone;
