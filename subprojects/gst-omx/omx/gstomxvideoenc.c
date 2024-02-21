@@ -3506,12 +3506,12 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     MetaBuffer *pMetaBuffer = (MetaBuffer *)(outbuf->omx_buf->pBuffer);
     NativeHandle* pMetaHandle = NULL;
     if (!pMetaBuffer) {
-      GST_ERROR_OBJECT (self, "pMetaBuffer is NULL, fail encoding. Enc sharing frame buf from upstream must enable omx metamode!");
+      GST_ERROR_OBJECT (self, "pMetaBuffer is NULL, fail encoding. Shouldn't reach here! when enc plugin share-buffer is true, plugin should prepare meta structure!");
       return FALSE;
     }
     pMetaHandle = pMetaBuffer->meta_handle;
     if (!pMetaHandle) {
-      GST_ERROR_OBJECT (self, "pMetaHandle is NULL, fail encoding. Enc sharing frame buf from upstream must enable omx metamode!");
+      GST_ERROR_OBJECT (self, "pMetaHandle is NULL, fail encoding. Shouldn't reach here! when enc plugin share-buffer is true, plugin should prepare meta structure!");
       return FALSE;
     }
     g_warn_if_fail((outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed || outbuf->port->port_def.format.video.eColorFormat == OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m/*same as QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m*/) && "Enc share-buffer only support VPU nv12 and nv12_ubwc fmt!");
