@@ -347,6 +347,7 @@ enum
   PROP_MIN_QUANT_B_FRAMES,
   PROP_MAX_QUANT_B_FRAMES,
   PROP_SHARE_BUFFER,
+  PROP_SHARE_BUFFER_AUTO,
   PROP_QP_MODE,
   PROP_MIN_QP,
   PROP_MAX_QP,
@@ -391,6 +392,7 @@ enum
 #define GST_OMX_VIDEO_ENC_MIN_QUANT_B_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT FALSE
+#define GST_OMX_VIDEO_ENC_SHARE_BUFFER_AUTO_DEFAULT (1)
 
 #define GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT (0xffffffff)
 #define GST_OMX_VIDEO_ENC_MIN_QP_DEFAULT (10)
@@ -549,6 +551,14 @@ gst_omx_video_enc_class_init (GstOMXVideoEncClass * klass)
           "share buffer with source",
           "share buffer with source",
           GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PAUSED));
+
+  g_object_class_install_property (gobject_class, PROP_SHARE_BUFFER_AUTO,
+      g_param_spec_int ("share-buffer-auto",
+          "share buffer with source automatically",
+          "share buffer automatically, if this prop is 1, share-buffer prop will automatically become true if caps is DMABuf",
+          0, 1, GST_OMX_VIDEO_ENC_SHARE_BUFFER_AUTO_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -800,6 +810,7 @@ gst_omx_video_enc_init (GstOMXVideoEnc * self)
   self->max_quant_p_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_P_FRAMES_DEFAULT;
   self->max_quant_b_frames = GST_OMX_VIDEO_ENC_MAX_QUANT_B_FRAMES_DEFAULT;
   self->enc_share_frame_buffer = GST_OMX_VIDEO_ENC_SHARE_BUFFER_DEFAULT;
+  self->enc_share_frame_buffer_auto = GST_OMX_VIDEO_ENC_SHARE_BUFFER_AUTO_DEFAULT;
 
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
   self->qp_mode = GST_OMX_VIDEO_ENC_QP_MODE_DEFAULT;
@@ -1689,6 +1700,9 @@ gst_omx_video_enc_set_property (GObject * object, guint prop_id,
     case PROP_SHARE_BUFFER:
       self->enc_share_frame_buffer = g_value_get_boolean (value);
       break;
+    case PROP_SHARE_BUFFER_AUTO:
+      self->enc_share_frame_buffer_auto = g_value_get_int (value);
+      break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
       self->qp_mode = g_value_get_enum (value);
@@ -1830,6 +1844,9 @@ gst_omx_video_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_SHARE_BUFFER:
       g_value_set_boolean(value, self->enc_share_frame_buffer);
+      break;
+    case PROP_SHARE_BUFFER_AUTO:
+      g_value_set_int(value, self->enc_share_frame_buffer_auto);
       break;
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
     case PROP_QP_MODE:
@@ -3162,6 +3179,10 @@ gst_omx_video_enc_set_format (GstVideoEncoder * encoder,
     }
   }
 
+  if (!self->enc_share_frame_buffer && self->enc_share_frame_buffer_auto == 1 && gst_caps_features_contains(gst_caps_get_features(state->caps, 0), GST_CAPS_FEATURE_MEMORY_DMABUF)) {
+    GST_INFO_OBJECT (self, "Found DMABuf in caps %"GST_PTR_FORMAT", will force share-buffer mode by automatically setting share-buffer prop as true!", state->caps);
+    self->enc_share_frame_buffer = TRUE;
+  }
   if(self->enc_share_frame_buffer){
     struct StoreMetaDataInBuffersParams sMetadataMode;
     GST_OMX_INIT_STRUCT(&sMetadataMode);
@@ -3516,15 +3537,15 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
     }
     g_warn_if_fail((outbuf->port->port_def.format.video.eColorFormat == QOMX_COLOR_FORMATYUV420PackedSemiPlanar32mCompressed || outbuf->port->port_def.format.video.eColorFormat == OMX_QCOM_COLOR_FormatYUV420PackedSemiPlanar32m/*same as QOMX_COLOR_FORMATYUV420PackedSemiPlanar32m*/) && "Enc share-buffer only support VPU nv12 and nv12_ubwc fmt!");
 
-    if (QVMeta && SIG_OF_QVMETA(QVMeta) == GST_MAKE_FOURCC('Q','a','U','T')) {
-      data_fd = FD_OF_QVMETA(QVMeta);
-      GST_LOG_OBJECT (self, "found QaUT signature on input frame gstbuf %p, GstVideoMeta %p, data fd %d", inbuf, QVMeta, data_fd);
-    }else if (gst_buffer_n_memory (inbuf) && gst_is_dmabuf_memory (gst_buffer_peek_memory (inbuf, 0))){
+    if (gst_buffer_n_memory (inbuf) && gst_is_dmabuf_memory (gst_buffer_peek_memory (inbuf, 0))){
       //GST DMABuf approach
       GstMemory * gstmem = gst_buffer_get_memory (inbuf, 0);
       data_fd = gst_dmabuf_memory_get_fd (gstmem);
-      GST_LOG_OBJECT (self, "found dmabuf fd on input frame gstbuf %p, gst memory %p, data fd %d", inbuf, gstmem, data_fd);
+      GST_LOG_OBJECT (self, "found dmabuf fd on input frame gstbuf %p, gst memory %p, data fd %d, no memcpy needed", inbuf, gstmem, data_fd);
       gst_memory_unref (gstmem);
+    }else if (QVMeta && SIG_OF_QVMETA(QVMeta) == GST_MAKE_FOURCC('Q','a','U','T')) {
+      data_fd = FD_OF_QVMETA(QVMeta);
+      GST_LOG_OBJECT (self, "found QaUT signature on input frame gstbuf %p, GstVideoMeta %p, data fd %d, no memcpy needed", inbuf, QVMeta, data_fd);
     }else{
       GST_ERROR_OBJECT (self, "Couldn't directly reuse pixel memory of gstbuf %p from upstream, fail encoding.", inbuf);
       return FALSE;
