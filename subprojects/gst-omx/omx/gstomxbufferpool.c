@@ -31,7 +31,6 @@
 #include "gstomxvideo.h"
 
 #include <gst/allocators/gstdmabuf.h>
-#include <vidc/media/msm_media_info.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_buffer_pool_debug_category);
 #define GST_CAT_DEFAULT gst_omx_buffer_pool_debug_category
@@ -385,26 +384,13 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
         stride[2] = nstride / 2;
         offset[2] = offset[1] + (stride[1] * nslice / 2);
         break;
+      case GST_VIDEO_FORMAT_NV12:
       case GST_VIDEO_FORMAT_NV12_10LE32:
-        //it's trick
-        stride[0] = stride[1] =
-            VENUS_Y_STRIDE(COLOR_FMT_NV12_BPP10_UBWC, GST_VIDEO_INFO_WIDTH (&pool->video_info));
-        offset[0] = 0;
-        offset[1] = stride[0] * VENUS_Y_SCANLINES(COLOR_FMT_NV12_BPP10_UBWC,
-            GST_VIDEO_INFO_HEIGHT (&pool->video_info));
-        break;
       case GST_VIDEO_FORMAT_P010_10LE:
       case GST_VIDEO_FORMAT_NV16:
       case GST_VIDEO_FORMAT_NV16_10LE32:
         stride[1] = nstride;
         offset[1] = offset[0] + stride[0] * nslice;
-        break;
-      case GST_VIDEO_FORMAT_NV12:
-        stride[0] = stride[1] =
-            VENUS_Y_STRIDE(COLOR_FMT_NV12, GST_VIDEO_INFO_WIDTH (&pool->video_info));
-        offset[0] = 0;
-        offset[1] = stride[0] * VENUS_Y_SCANLINES(COLOR_FMT_NV12,
-            GST_VIDEO_INFO_HEIGHT (&pool->video_info));
         break;
       default:
         g_assert_not_reached ();
