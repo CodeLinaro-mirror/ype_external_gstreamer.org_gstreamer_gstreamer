@@ -97,4 +97,7 @@ struct zwp_linux_dmabuf_v1 *gst_wl_display_get_dmabuf_v1 (GstWlDisplay * self);
 GST_WL_API
 gboolean gst_wl_display_has_own_display (GstWlDisplay * self);
 
+GST_WL_API
+guint64 gst_wl_display_get_server_modifier_caps (GstWlDisplay * self);
+
 G_END_DECLS

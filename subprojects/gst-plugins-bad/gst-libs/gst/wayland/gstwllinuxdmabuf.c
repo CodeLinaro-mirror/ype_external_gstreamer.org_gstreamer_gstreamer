@@ -24,12 +24,15 @@
 #include <config.h>
 #endif
 
+#include <drm_fourcc.h>
 #include "gstwllinuxdmabuf.h"
 
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 
 GST_DEBUG_CATEGORY (gst_wl_dmabuf_debug);
 #define GST_CAT_DEFAULT gst_wl_dmabuf_debug
+
+static G_DEFINE_QUARK (FBufModifierQuark, gst_fbuf_modifier_qdata);
 
 void
 gst_wl_linux_dmabuf_init_once (void)
@@ -92,9 +95,14 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
   struct zwp_linux_buffer_params_v1 *params;
   gint64 timeout;
   ConstructBufferData data;
+  guint64 modifier, *p_modifier;
 
   g_return_val_if_fail (gst_wl_display_check_format_for_dmabuf (display,
           GST_VIDEO_INFO_FORMAT (info)), NULL);
+
+  p_modifier = buf ? gst_mini_object_get_qdata (GST_MINI_OBJECT_CAST (buf), gst_fbuf_modifier_qdata_quark()) : NULL;
+  modifier = p_modifier ? *p_modifier : DRM_FORMAT_MOD_INVALID;
+  GST_INFO_OBJECT(display, "Found modifier: gstbuf %p, %p, modifier val 0x%llx", buf, p_modifier, (unsigned long long)modifier);
 
   mem = gst_buffer_peek_memory (buf, 0);
   format = gst_video_format_to_wl_dmabuf_format (GST_VIDEO_INFO_FORMAT (info));
@@ -125,7 +133,7 @@ gst_wl_linux_dmabuf_construct_wl_buffer (GstBuffer * buf,
       GstMemory *m = gst_buffer_peek_memory (buf, mem_idx);
       gint fd = gst_dmabuf_memory_get_fd (m);
       zwp_linux_buffer_params_v1_add (params, fd, i, m->offset + skip,
-          stride, 0, 0);
+          stride, modifier >> 32, modifier & 0xffffffff);
     } else {
       GST_ERROR_OBJECT (mem->allocator, "memory does not seem to contain "
           "enough data for the specified format");
