@@ -58,6 +58,7 @@ enum
 enum
 {
   PROP_0,
+  PROP_DISABLE_UBWC,
   PROP_DISPLAY,
   PROP_FULLSCREEN,
   PROP_ROTATE_METHOD,
@@ -70,7 +71,7 @@ GST_DEBUG_CATEGORY (gstwayland_debug);
 #define WL_VIDEO_FORMATS \
     "{ BGRx, BGRA, RGBx, xBGR, xRGB, RGBA, ABGR, ARGB, RGB, BGR, " \
     "RGB16, BGR16, YUY2, YVYU, UYVY, AYUV, NV12, NV21, NV16, NV61, " \
-    "YUV9, YVU9, Y41B, I420, YV12, Y42B, v308, P010_10LE }"
+    "YUV9, YVU9, Y41B, I420, YV12, Y42B, v308, P010_10LE, NV12_10LE32 }"
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -159,6 +160,11 @@ gst_wayland_sink_class_init (GstWaylandSinkClass * klass)
       g_param_spec_string ("display", "Wayland Display name", "Wayland "
           "display name to connect to, if not supplied via the GstContext",
           NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_DISABLE_UBWC,
+      g_param_spec_boolean ("disable-ubwc", "Disable UBWC",
+          "Disable UBWC in the video sink", FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_FULLSCREEN,
       g_param_spec_boolean ("fullscreen", "Fullscreen",
@@ -256,6 +262,11 @@ gst_wayland_sink_get_property (GObject * object,
       g_value_set_string (value, self->display_name);
       GST_OBJECT_UNLOCK (self);
       break;
+    case PROP_DISABLE_UBWC:
+      GST_OBJECT_LOCK (self);
+      g_value_set_boolean (value, self->disable_ubwc);
+      GST_OBJECT_UNLOCK (self);
+      break;
     case PROP_FULLSCREEN:
       GST_OBJECT_LOCK (self);
       g_value_set_boolean (value, self->fullscreen);
@@ -282,6 +293,11 @@ gst_wayland_sink_set_property (GObject * object,
     case PROP_DISPLAY:
       GST_OBJECT_LOCK (self);
       self->display_name = g_value_dup_string (value);
+      GST_OBJECT_UNLOCK (self);
+      break;
+    case PROP_DISABLE_UBWC:
+      GST_OBJECT_LOCK (self);
+      self->disable_ubwc = g_value_get_boolean (value);
       GST_OBJECT_UNLOCK (self);
       break;
     case PROP_FULLSCREEN:
@@ -527,6 +543,8 @@ gst_wayland_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
     gint i;
     guint fmt;
     GstVideoFormat gfmt;
+    GValue compression_list = G_VALUE_INIT;
+    g_value_init (&compression_list, GST_TYPE_LIST);
 
     g_value_init (&shm_list, GST_TYPE_LIST);
     g_value_init (&dmabuf_list, GST_TYPE_LIST);
@@ -560,6 +578,18 @@ gst_wayland_sink_get_caps (GstBaseSink * bsink, GstCaps * filter)
 
     gst_structure_take_value (gst_caps_get_structure (caps, 1), "format",
         &dmabuf_list);
+
+    /* Add compression in caps */
+    g_value_init (&value, G_TYPE_STRING);
+    g_value_set_static_string (&value, "linear");
+    gst_value_list_append_and_take_value (&compression_list, &value);
+    if (!self->disable_ubwc && (gst_wl_display_get_server_modifier_caps(self->display) & 0x3))  {
+      g_value_init (&value, G_TYPE_STRING);
+      g_value_set_static_string (&value, "ubwc");
+      gst_value_list_append_and_take_value (&compression_list, &value);
+    }
+
+    gst_structure_take_value (gst_caps_get_structure (caps, 1), "compression", &compression_list);
 
     GST_DEBUG_OBJECT (self, "display caps: %" GST_PTR_FORMAT, caps);
   }

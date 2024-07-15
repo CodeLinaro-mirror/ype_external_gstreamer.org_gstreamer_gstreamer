@@ -30,6 +30,7 @@
 #include "xdg-shell-client-protocol.h"
 
 #include <errno.h>
+#include <drm_fourcc.h>
 
 #define GST_CAT_DEFAULT gst_wl_display_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
@@ -52,6 +53,7 @@ typedef struct _GstWlDisplayPrivate
   struct zwp_linux_dmabuf_v1 *dmabuf;
   GArray *shm_formats;
   GArray *dmabuf_formats;
+  guint64 server_modifier_caps;
 
   /* private */
   gboolean own_display;
@@ -189,8 +191,30 @@ dmabuf_format (void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf,
     g_array_append_val (priv->dmabuf_formats, format);
 }
 
+static void
+dmabuf_modifier(void *data, struct zwp_linux_dmabuf_v1 *zwp_linux_dmabuf_v1, uint32_t format, uint32_t modifier_hi, uint32_t modifier_lo)
+{
+  GstWlDisplay *self = data;
+  GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
+  guint64 modifier = ((uint64_t) modifier_hi << 32) | modifier_lo;
+  if (modifier == DRM_FORMAT_MOD_QCOM_COMPRESSED) {
+    if (format == DRM_FORMAT_NV12) {
+      priv->server_modifier_caps |= 1;
+    }else if (format == GST_MAKE_FOURCC('Q','1','2','A')) {
+      priv->server_modifier_caps |= 2;
+    }
+  }
+  GST_INFO("wayland server report fmt 0x%x(%"GST_FOURCC_FORMAT") modifier 0x%llx, s-m-caps set to 0x%llx", format, GST_FOURCC_ARGS(format), (unsigned long long)modifier, (unsigned long long)priv->server_modifier_caps);
+
+  if (gst_wl_dmabuf_format_to_video_format (format) != GST_VIDEO_FORMAT_UNKNOWN) {
+    //As same format probably has multiple modifiers and server probably report duplicated fmt+modifier, there are repeated formats added into dmabuf_formats. It seems no problem, as gst caps negotiation could handle such repeated caps.
+    g_array_append_val (priv->dmabuf_formats, format);
+  }
+}
+
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
   dmabuf_format,
+  dmabuf_modifier,
 };
 
 gboolean
@@ -277,7 +301,7 @@ registry_handle_global (void *data, struct wl_registry *registry,
         wl_registry_bind (registry, id, &wp_viewporter_interface, 1);
   } else if (g_strcmp0 (interface, "zwp_linux_dmabuf_v1") == 0) {
     priv->dmabuf =
-        wl_registry_bind (registry, id, &zwp_linux_dmabuf_v1_interface, 1);
+        wl_registry_bind (registry, id, &zwp_linux_dmabuf_v1_interface, version >= 3 ? 3 : 1);
     zwp_linux_dmabuf_v1_add_listener (priv->dmabuf, &dmabuf_listener, self);
   }
 }
@@ -564,4 +588,11 @@ gst_wl_display_has_own_display (GstWlDisplay * self)
   GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
 
   return priv->own_display;
+}
+
+guint64 gst_wl_display_get_server_modifier_caps (GstWlDisplay * self)
+{
+  GstWlDisplayPrivate *priv = gst_wl_display_get_instance_private (self);
+
+  return priv->server_modifier_caps;
 }
