@@ -103,12 +103,14 @@ enum
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
   PROP_DEINTERLACE,
+  PROP_SKIPCROPUPDATE,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
 #define GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT          (FALSE)
 #define GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT          (TRUE)
+#define GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT            (TRUE)
 
 /* class initialization */
 
@@ -493,6 +495,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_DEINTERLACE:
       self->deinterlace_mode = g_value_get_boolean (value);
       break;
+    case PROP_SKIPCROPUPDATE:
+      self->omx_skipcropupdate = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -519,6 +524,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_DEINTERLACE:
       g_value_set_boolean (value, self->deinterlace_mode);
+      break;
+    case PROP_SKIPCROPUPDATE:
+      g_value_set_boolean (value, self->omx_skipcropupdate);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -566,6 +574,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
       g_param_spec_boolean ("deinterlace", "deinterlace output mode",
           "If disable, decoder output should not be deinterlaced",
           GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
+  g_object_class_install_property (gobject_class, PROP_SKIPCROPUPDATE,
+      g_param_spec_boolean ("omx-skipcropupdate", "set omx to skipcropupdate",
+          "If set to true, omx will skipcropupdate",
+          GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
@@ -629,6 +644,7 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   self->output_picture_order_mode = GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
   self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
   self->deinterlace_mode = GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT;
+  self->omx_skipcropupdate = GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT;
 
 
 #ifdef USE_GBM
@@ -3746,7 +3762,9 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
   gst_omx_video_dec_set_latency (self);
 #endif
 
-  gst_omx_video_dec_set_skipcropupdate(self);
+  if (self->omx_skipcropupdate) {
+    gst_omx_video_dec_set_skipcropupdate(self);
+  }
 
   self->downstream_flow_ret = GST_FLOW_OK;
   return TRUE;
