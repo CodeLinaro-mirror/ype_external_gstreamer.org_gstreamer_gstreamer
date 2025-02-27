@@ -1751,6 +1751,8 @@ omx_index_type_to_str (OMX_INDEXTYPE index)
       return "OMX_IndexKhronosExtensions";
     case OMX_QTIIndexConfigContentAdaptiveCoding:
       return "OMX_QTIIndexConfigContentAdaptiveCoding";
+    case OMX_QcomIndexParamH264VUITimingInfo:
+      return "OMX_QcomIndexParamH264VUITimingInfo";
     case OMX_IndexVendorStartUnused:
       return "OMX_IndexVendorStartUnused";
     case OMX_IndexMax:

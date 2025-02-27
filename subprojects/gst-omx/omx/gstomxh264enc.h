@@ -64,6 +64,7 @@ struct _GstOMXH264Enc
   GstOMXH264EncSliceMode multislice_mode;
   guint32 multislice_value;
   gboolean multisliceinfo_extradata_enable;
+  gboolean vui_timinginfo_enable;
 
   GList *headers;
 };
