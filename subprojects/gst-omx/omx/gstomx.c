@@ -261,7 +261,7 @@ gst_omx_buffer_reset (GstOMXBuffer * buf)
   GST_OMX_SET_TICKS (buf->omx_buf->nTimeStamp, G_GUINT64_CONSTANT (0));
 }
 
-static void gst_omx_buffer_unmap (GstOMXBuffer * buffer);
+static void gst_omx_buffer_unmap (GstOMXBuffer * buffer, guint dynamic_input_buffer_mode);
 
 /* NOTE: Call with comp->lock, comp->messages_lock will be used */
 static void
@@ -448,8 +448,17 @@ gst_omx_component_handle_messages (GstOMXComponent * comp)
            */
           gst_omx_buffer_reset (buf);
 
+
+          GST_LOG_OBJECT (comp->parent, "ETBD %s port %u emptied buffer %p (%p) (%p)",
+              comp->name, buf->port->index, buf, buf->omx_buf->pBuffer, buf->omx_buf);
+          if (port->dynamic_input_buffer_mode == 1) {
+            gst_element_post_message (GST_ELEMENT_CAST (comp->parent),
+              gst_message_new_element (GST_OBJECT_CAST (comp->parent),
+                gst_structure_new ("omx-video-sec-etbd", "input-buf", G_TYPE_POINTER, buf->input_buffer, NULL)));
+          }
+
           /* Release and unmap the parent buffer, if any */
-          gst_omx_buffer_unmap (buf);
+          gst_omx_buffer_unmap (buf, port->dynamic_input_buffer_mode);
         } else {
           /* Output buffer contains output now or
            * the port was flushed */
@@ -835,7 +844,7 @@ EventHandler (OMX_HANDLETYPE hComponent, OMX_PTR pAppData, OMX_EVENTTYPE eEvent,
 }
 
 static void
-gst_omx_buffer_unmap (GstOMXBuffer * buffer)
+gst_omx_buffer_unmap (GstOMXBuffer * buffer, guint dynamic_input_buffer_mode)
 {
   g_return_if_fail (buffer != NULL);
 
@@ -854,7 +863,10 @@ gst_omx_buffer_unmap (GstOMXBuffer * buffer)
     if (buffer->input_buffer_mapped)
       gst_buffer_unmap (buffer->input_buffer, &buffer->map);
     buffer->input_buffer_mapped = FALSE;
-    g_clear_pointer (&buffer->input_buffer, gst_buffer_unref);
+    //1: Input buffer is allocated by app, it will be released by app.
+    //So it don't need to release input buffer in gstomx
+    if (dynamic_input_buffer_mode != 1)
+      g_clear_pointer (&buffer->input_buffer, gst_buffer_unref);
   }
 }
 

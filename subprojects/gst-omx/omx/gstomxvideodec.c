@@ -104,6 +104,7 @@ enum
   PROP_LOW_LATENCY,
   PROP_DEINTERLACE,
   PROP_SKIPCROPUPDATE,
+  PROP_DYNAMIC_INPUT_BUFFER,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
@@ -111,7 +112,7 @@ enum
 #define GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT          (FALSE)
 #define GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT          (TRUE)
 #define GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT            (TRUE)
-
+#define GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT          (0)
 /* class initialization */
 
 #define DEBUG_INIT \
@@ -498,6 +499,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_SKIPCROPUPDATE:
       self->omx_skipcropupdate = g_value_get_boolean (value);
       break;
+    case PROP_DYNAMIC_INPUT_BUFFER:
+      self->dynamic_input_buffer_mode = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -527,6 +531,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_SKIPCROPUPDATE:
       g_value_set_boolean (value, self->omx_skipcropupdate);
+      break;
+    case PROP_DYNAMIC_INPUT_BUFFER:
+      g_value_set_uint (value, self->dynamic_input_buffer_mode);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -584,6 +591,14 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class, PROP_DYNAMIC_INPUT_BUFFER,
+      g_param_spec_uint ("dynamic-input-buffer-mode", "Dynamic input buffer mode",
+          "If set to non-zero, the input buffer should be allocated outside of the gstomxvideodec,"
+          "and pass the dma input buffer to gstomxvideodec,"
+          "0: default input data copy logic; 1: APP allocate input buf; 2: gst upstream plugin allocate dma input buf",
+           0, 2, GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_dec_change_state);
 
@@ -645,7 +660,7 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
   self->deinterlace_mode = GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT;
   self->omx_skipcropupdate = GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT;
-
+  self->dynamic_input_buffer_mode = GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT;
 
 #ifdef USE_GBM
   self->gbm_dev_fd = -1;
@@ -903,6 +918,19 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
     }
   }
 
+  if (self->dynamic_input_buffer_mode) {
+    OMX_VENDOR_DEC_INPUT_EXTERNAL_BUF param;
+    OMX_ERRORTYPE err;
+    GST_OMX_INIT_STRUCT(&param);
+    param.enable = OMX_TRUE;
+    err = gst_omx_component_set_config(self->dec, OMX_IndexVendorDecInputExternalBuf, (OMX_PTR)&param);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT(self, "Failed to set dec input external buf enable, err 0x%08x", err);
+    } else {
+      GST_INFO_OBJECT(self, "dec input external buf enable: %d successful, mode:%d", param.enable,
+          self->dynamic_input_buffer_mode);
+    }
+  }
   return TRUE;
 }
 
@@ -3291,6 +3319,7 @@ gst_omx_video_dec_disable (GstOMXVideoDec * self)
 static gboolean
 gst_omx_video_dec_allocate_in_buffers (GstOMXVideoDec * self)
 {
+  self->dec_in_port->dynamic_input_buffer_mode = self->dynamic_input_buffer_mode;
   switch (self->input_allocation) {
     case GST_OMX_BUFFER_ALLOCATION_ALLOCATE_BUFFER:
       if (gst_omx_port_allocate_buffers (self->dec_in_port) != OMX_ErrorNone)
@@ -3885,7 +3914,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
   GstOMXPort *port;
   GstOMXBuffer *buf;
   GstBuffer *codec_data = NULL;
-  guint offset = 0, size;
+  guint offset = 0, size = 0, maxsize = 0;
   GstClockTime timestamp, duration;
   OMX_ERRORTYPE err;
   gboolean done = FALSE;
@@ -4093,13 +4122,51 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
           "Copying %d bytes (frame offset %d) to the component",
           (guint) buf->omx_buf->nFilledLen, offset);
 
-      copied = gst_buffer_extract (frame->input_buffer, offset,
-          buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
-          buf->omx_buf->nFilledLen);
-      if (copied < buf->omx_buf->nFilledLen) {
-        GST_ERROR_OBJECT(self, "Wanted %u bytes from frame, got %u.", (unsigned) buf->omx_buf->nFilledLen, copied);
-        return GST_FLOW_ERROR;
+      if (self->dynamic_input_buffer_mode) {
+        gint fd = -1;
+        GstMemory* gst_mem = gst_buffer_peek_memory (frame->input_buffer, 0);
+        gst_memory_get_sizes (gst_mem, NULL, &maxsize);
+        if (self->dynamic_input_buffer_mode == 1) {
+          if (gst_is_fd_memory(gst_mem)) {
+            fd = gst_fd_memory_get_fd(gst_mem);
+          } else {
+            GST_ERROR_OBJECT(self, "is not fd memory %p(gstbuf %p) for dynamic input buf mode !", gst_mem, frame->input_buffer);
+            return GST_FLOW_ERROR;
+          }
+        } else if (self->dynamic_input_buffer_mode == 2) {
+          if (gst_is_dmabuf_memory(gst_mem)) {
+            fd = gst_fd_memory_get_fd(gst_mem);
+          } else {
+            GST_ERROR_OBJECT(self, "is not dmabuf memory %p(gstbuf %p) for dynamic input buf mode !", gst_mem, frame->input_buffer);
+            return GST_FLOW_ERROR;
+          }
+        } else {
+            GST_ERROR_OBJECT(self, "invalid dynamic input buf mode %d !", self->dynamic_input_buffer_mode);
+            return GST_FLOW_ERROR;
+        }
+
+        NativeHandle *pNativeHandle = (NativeHandle *)(buf->omx_buf->pBuffer);
+        pNativeHandle->data[0] = fd;
+        buf->omx_buf->nFilledLen = size;
+        copied = size;
+        buf->input_buffer = gst_buffer_ref(frame->input_buffer);
+        GST_LOG_OBJECT (self, "will empty this buffer fd:%d, len:%d, nAllocLen:%d, maxsize:%u for dynamic input buf mode",
+            fd, (int)buf->omx_buf->nFilledLen, (int)buf->omx_buf->nAllocLen, maxsize);
+        //Actually, omx_buf->nAllocLen should be updated to maxsize. That nAllocLen means that buffer/memory allocated size.
+        //Currently, suppose external allocated buf's size equal to omx/driver internal calculated buf size. Later, will improve it.
+        if (maxsize != (guint)buf->omx_buf->nAllocLen) {
+            GST_WARNING_OBJECT(self, "dynamic input buf mode(%u): input mem %p(gstbuf %p) maxsize %u isn't same as omx buf internal calculated size %d !", self->dynamic_input_buffer_mode, gst_mem, frame->input_buffer, maxsize, (int)buf->omx_buf->nAllocLen);
+        }
+      } else {
+        copied = gst_buffer_extract (frame->input_buffer, offset,
+            buf->omx_buf->pBuffer + buf->omx_buf->nOffset,
+            buf->omx_buf->nFilledLen);
+        if (copied < buf->omx_buf->nFilledLen) {
+          GST_ERROR_OBJECT(self, "Wanted %u bytes from frame, got %u.", (unsigned) buf->omx_buf->nFilledLen, copied);
+          return GST_FLOW_ERROR;
+        }
       }
+
       GST_DEBUG_OBJECT(self, "Copied %u bytes from input frame to port's buffer.",  copied);
 
       offset += buf->omx_buf->nFilledLen;

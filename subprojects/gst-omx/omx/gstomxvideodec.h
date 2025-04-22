@@ -115,6 +115,7 @@ struct _GstOMXVideoDec
   gboolean low_latency_mode;
   gboolean deinterlace_mode;
   gboolean omx_skipcropupdate;
+  guint dynamic_input_buffer_mode;
 #ifdef USE_GBM
   void* gbm_lib;
   struct gbm_device * (*gbm_api_create_device)(int fd);
