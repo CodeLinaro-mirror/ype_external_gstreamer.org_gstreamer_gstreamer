@@ -378,6 +378,7 @@ struct _GstOMXPort {
   guint pending_bufs_before_rect_change;
   gboolean rect_changed;
   gboolean enc_share_frame_buffer;
+  guint dynamic_input_buffer_mode;
 };
 
 struct _GstOMXComponent {
