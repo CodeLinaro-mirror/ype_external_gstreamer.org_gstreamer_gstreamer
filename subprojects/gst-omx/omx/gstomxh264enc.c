@@ -64,7 +64,8 @@ enum
   PROP_REF_FRAMES,
   PROP_MULTISLICE_MODE,
   PROP_MULTISLICE_VALUE,
-  PROP_MULTSLICEINFO_EXTRADATA
+  PROP_MULTSLICEINFO_EXTRADATA,
+  PROP_VUI_TIMINGINFO_ENABLE,
 };
 
 #define GST_OMX_H264_VIDEO_ENC_INLINE_SPS_PPS_HEADERS_DEFAULT      TRUE
@@ -87,6 +88,7 @@ enum
 #define GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_MODE_DEFAULT GST_OMX_H264_ENC_SLICE_MODE_DISABLE
 #define GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_VALUE_DEFAULT 2048
 #define GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_INFO_EXTRADATA_DEFAULT  FALSE
+#define GST_OMX_H264_VIDEO_ENC_VUI_TIMINGINFO_DEFAULT FALSE
 
 #define GST_OMX_H264_ENC_SLICE_MODE_TYPE (gst_omx_h264_enc_slice_mode_get_type())
 static GType
@@ -277,6 +279,14 @@ gst_omx_h264_enc_class_init (GstOMXH264EncClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 
+  g_object_class_install_property (gobject_class, PROP_VUI_TIMINGINFO_ENABLE,
+      g_param_spec_boolean ("vui-timinginfo",
+          "set vui timinginfo enable",
+          "set vui timinginfo enable",
+          GST_OMX_H264_VIDEO_ENC_VUI_TIMINGINFO_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+
   basevideoenc_class->flush = gst_omx_h264_enc_flush;
   basevideoenc_class->stop = gst_omx_h264_enc_stop;
 
@@ -337,6 +347,9 @@ gst_omx_h264_enc_set_property (GObject * object, guint prop_id,
     case PROP_MULTSLICEINFO_EXTRADATA:
       self->multisliceinfo_extradata_enable = g_value_get_boolean (value);
       break;
+    case PROP_VUI_TIMINGINFO_ENABLE:
+      self->vui_timinginfo_enable = g_value_get_boolean(value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -384,6 +397,9 @@ gst_omx_h264_enc_get_property (GObject * object, guint prop_id, GValue * value,
     case PROP_MULTSLICEINFO_EXTRADATA:
       g_value_set_boolean (value, self->multisliceinfo_extradata_enable);
       break;
+    case PROP_VUI_TIMINGINFO_ENABLE:
+      g_value_set_boolean(value, self->vui_timinginfo_enable);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -411,6 +427,7 @@ gst_omx_h264_enc_init (GstOMXH264Enc * self)
     GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_VALUE_DEFAULT;
   self->multisliceinfo_extradata_enable =
     GST_OMX_H264_VIDEO_ENC_MULTI_SLICE_INFO_EXTRADATA_DEFAULT;
+  self->vui_timinginfo_enable = GST_OMX_H264_VIDEO_ENC_VUI_TIMINGINFO_DEFAULT;
 
 }
 
@@ -652,6 +669,28 @@ update_param_avc (GstOMXH264Enc * self,
 }
 
 static gboolean
+set_avc_vui_timinginfo (GstOMXH264Enc * self)
+{
+  OMX_ERRORTYPE err;
+  if (self->vui_timinginfo_enable) {
+    OMX_QCOM_VIDEO_PARAM_VUI_TIMING_INFO vui_timinginfo_params;
+    GST_OMX_INIT_STRUCT(&vui_timinginfo_params);
+    vui_timinginfo_params.bEnable = OMX_TRUE;
+
+    err = gst_omx_component_set_parameter(GST_OMX_VIDEO_ENC (self)->enc, (OMX_INDEXTYPE)OMX_QcomIndexParamH264VUITimingInfo, (OMX_PTR)&vui_timinginfo_params);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT (self,
+            "Failed to set vui timinginfo : %s (0x%08x)",
+            gst_omx_error_to_string (err), err);
+      return FALSE;
+    } else {
+      GST_INFO_OBJECT(self, "set vui timinginfo to enable success");
+    }
+  }
+  return TRUE;
+}
+
+static gboolean
 set_avc_intra_period (GstOMXH264Enc * self)
 {
   OMX_VIDEO_CONFIG_AVCINTRAPERIOD config_avcintraperiod;
@@ -795,6 +834,8 @@ gst_omx_h264_enc_set_format (GstOMXVideoEnc * enc, GstOMXPort * port,
   if (self->interval_intraframes)
     set_brcm_video_intra_period (self);
 #endif
+
+  set_avc_vui_timinginfo (self);
 
   gst_omx_port_get_port_definition (GST_OMX_VIDEO_ENC (self)->enc_out_port,
       &port_def);
