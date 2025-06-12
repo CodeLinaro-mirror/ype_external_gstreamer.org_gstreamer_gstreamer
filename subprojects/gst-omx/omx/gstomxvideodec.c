@@ -3914,7 +3914,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
   GstOMXPort *port;
   GstOMXBuffer *buf;
   GstBuffer *codec_data = NULL;
-  guint offset = 0, size = 0, maxsize = 0;
+  guint offset = 0, size = 0;
   GstClockTime timestamp, duration;
   OMX_ERRORTYPE err;
   gboolean done = FALSE;
@@ -4124,6 +4124,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
 
       if (self->dynamic_input_buffer_mode) {
         gint fd = -1;
+        gsize maxsize = 0;
         GstMemory* gst_mem = gst_buffer_peek_memory (frame->input_buffer, 0);
         gst_memory_get_sizes (gst_mem, NULL, &maxsize);
         if (self->dynamic_input_buffer_mode == 1) {
