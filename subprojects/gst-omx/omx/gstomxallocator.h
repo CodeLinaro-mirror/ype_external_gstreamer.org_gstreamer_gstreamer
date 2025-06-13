@@ -28,6 +28,11 @@
 #include <gst/gst.h>
 
 #include "gstomx.h"
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <dlfcn.h>
+#include "gbm.h"
+#include "gbm_priv.h"
 
 G_BEGIN_DECLS
 
@@ -75,6 +80,9 @@ struct _GstOMXAllocator
   /* array of GstOMXMemory */
   GPtrArray *memories;
   guint n_memories;
+  GPtrArray *gbmbos;
+  GPtrArray *dup_meta_fds;
+  GPtrArray *dup_fds;
 
   guint n_outstanding;
   gboolean active;

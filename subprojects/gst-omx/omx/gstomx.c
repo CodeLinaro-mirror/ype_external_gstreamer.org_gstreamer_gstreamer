@@ -73,6 +73,8 @@ static GHashTable *core_handles;
 G_LOCK_DEFINE_STATIC (buffer_flags_str);
 static GHashTable *buffer_flags_str;
 
+static void is_buffer_used (gpointer data, gpointer user_data);
+
 gboolean
 gst_omx_caps_has_compression (const GstCaps * caps, const gchar * compression)
 {
@@ -2685,6 +2687,7 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
     buf->port = port;
     buf->used = FALSE;
     buf->settings_cookie = port->settings_cookie;
+    buf->fmt_settings_cookie = port->fmt_settings_cookie;
     g_ptr_array_add (port->buffers, buf);
 
     if (buffers) {
@@ -2743,6 +2746,17 @@ gst_omx_port_allocate_buffers_unlocked (GstOMXPort * port,
     g_queue_push_tail (&port->pending_buffers, buf);
     if (buffers || images)
       l = l->next;
+  }
+
+  /* update the configured_settings_cookie earlier to handle the concurrency
+   * issue of multi-resolution case. */
+  GST_DEBUG_OBJECT (comp->parent, "configured_settings_cookie:%d, settings_cookie:%d",
+      port->configured_settings_cookie, port->settings_cookie);
+  if (port->port_def.eDir == OMX_DirOutput) {
+    if (port->configured_settings_cookie != port->settings_cookie) {
+      port->configured_settings_cookie = port->settings_cookie;
+      GST_DEBUG_OBJECT (comp->parent, "update the setting cookie of output port");
+    }
   }
 
   gst_omx_component_handle_messages (comp);
@@ -3148,6 +3162,7 @@ gst_omx_port_wait_buffers_released_unlocked (GstOMXPort * port,
   OMX_ERRORTYPE err = OMX_ErrorNone;
   OMX_ERRORTYPE last_error;
   gboolean signalled;
+  gboolean has_used = FALSE;
 
   comp = port->comp;
 
@@ -3174,13 +3189,31 @@ gst_omx_port_wait_buffers_released_unlocked (GstOMXPort * port,
   signalled = TRUE;
   last_error = OMX_ErrorNone;
   gst_omx_component_handle_messages (comp);
-  while (signalled && last_error == OMX_ErrorNone && (port->buffers
-          && port->buffers->len >
-          g_queue_get_length (&port->pending_buffers))) {
-    signalled = gst_omx_component_wait_message (comp, timeout);
-    if (signalled)
-      gst_omx_component_handle_messages (comp);
-    last_error = comp->last_error;
+  if (port->port_def.eDir == OMX_DirOutput && port->multi_resolution) {
+    /* Just wait the buffers held in omx component back for out port */
+    if (port->buffers) {
+      g_ptr_array_foreach (port->buffers, is_buffer_used, &has_used);
+    }
+
+    while (signalled && last_error == OMX_ErrorNone && (port->buffers
+            && has_used)) {
+      signalled = gst_omx_component_wait_message (comp, timeout);
+      if (signalled) {
+        gst_omx_component_handle_messages (comp);
+        has_used = FALSE;
+        g_ptr_array_foreach (port->buffers, is_buffer_used, &has_used);
+      }
+      last_error = comp->last_error;
+    }
+  } else {
+    while (signalled && last_error == OMX_ErrorNone && (port->buffers
+            && port->buffers->len >
+            g_queue_get_length (&port->pending_buffers))) {
+      signalled = gst_omx_component_wait_message (comp, timeout);
+      if (signalled)
+        gst_omx_component_handle_messages (comp);
+      last_error = comp->last_error;
+    }
   }
 
   if (last_error != OMX_ErrorNone) {
@@ -3291,6 +3324,7 @@ gst_omx_port_populate_unlocked (GstOMXPort * port)
        */
       gst_omx_buffer_reset (buf);
 
+      buf->used = TRUE;
       log_omx_api_trace_buffer (comp, "FillThisBuffer", buf);
       err = OMX_FillThisBuffer (comp->handle, buf->omx_buf);
 
@@ -4303,6 +4337,19 @@ done:
   g_free (config_dirs);
 
   return TRUE;
+}
+
+static void
+is_buffer_used (gpointer data, gpointer user_data)
+{
+  gboolean *has_used = (gboolean *)user_data;
+  GstOMXBuffer *buf = (GstOMXBuffer *)data;
+  if (buf->used) {
+    GST_LOG_OBJECT (NULL, "GstOMXBuffer %p is used", buf);
+    *has_used = TRUE;
+  } else {
+    GST_LOG_OBJECT (NULL, "GstOMXBuffer %p is not used", buf);
+  }
 }
 
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,

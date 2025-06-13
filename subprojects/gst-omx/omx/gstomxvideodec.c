@@ -106,6 +106,7 @@ enum
   PROP_DEINTERLACE,
   PROP_SKIPCROPUPDATE,
   PROP_DYNAMIC_INPUT_BUFFER,
+  PROP_MULTI_RESOLUTION,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
@@ -115,6 +116,7 @@ enum
 #define GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT          (TRUE)
 #define GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT            (TRUE)
 #define GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT          (0)
+#define GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT          (FALSE)
 /* class initialization */
 
 #define DEBUG_INIT \
@@ -493,6 +495,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_DYNAMIC_INPUT_BUFFER:
       self->dynamic_input_buffer_mode = g_value_get_uint (value);
       break;
+    case PROP_MULTI_RESOLUTION:
+      self->multi_resolution = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -528,6 +533,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_DYNAMIC_INPUT_BUFFER:
       g_value_set_uint (value, self->dynamic_input_buffer_mode);
+      break;
+    case PROP_MULTI_RESOLUTION:
+      g_value_set_boolean (value, self->multi_resolution);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -602,6 +610,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
            0, 2, GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_MULTI_RESOLUTION,
+      g_param_spec_boolean ("multi-resolution", "multi-resolution stream",
+          "If enabled, decoder support multi-resolution and single resolution stream."
+          " If disabled, decoder only support single resolution stream.",
+          GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_dec_change_state);
 
@@ -665,7 +680,7 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   self->deinterlace_mode = GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT;
   self->omx_skipcropupdate = GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT;
   self->dynamic_input_buffer_mode = GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT;
-
+  self->multi_resolution = GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT;
   self->gbm_dev_fd = -1;
   self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
   GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
@@ -1371,6 +1386,7 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
   port = self->dec_out_port;
 #endif
 
+  port->multi_resolution = self->multi_resolution;
   pool = gst_video_decoder_get_buffer_pool (GST_VIDEO_DECODER (self));
   /* do not use out_port_pool */
 #ifdef _QTI_DMABUFFER_MODE_
@@ -1444,7 +1460,7 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
     self->out_port_pool =
         gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->dec, port,
         self->dmabuf ? GST_OMX_BUFFER_MODE_DMABUF :
-        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY);
+        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY, self->isubwc);
 
 #if defined (HAVE_GST_GL)
   if (eglimage) {
@@ -1840,8 +1856,15 @@ static gboolean
 gst_omx_video_dec_deallocate_output_buffers (GstOMXVideoDec * self)
 {
   if (self->out_port_pool) {
-    /* Pool will free buffers when stopping */
-    gst_buffer_pool_set_active (self->out_port_pool, FALSE);
+    if (self->multi_resolution) {
+      /* The buffer fd has been duplicated, so that it's safe
+      * to deallocate the original buffer fd. When all gst buffer comes
+      * back to the output pool, they can be freed when pool is finalized.
+      */
+      gst_omx_port_deallocate_buffers (self->dec_out_port);
+    } else {
+      gst_buffer_pool_set_active (self->out_port_pool, FALSE);
+    }
 #if 0
     gst_buffer_pool_wait_released (self->out_port_pool);
 #endif
@@ -2450,7 +2473,7 @@ gst_omx_video_dec_allocate_outport_omx_buffers (GstOMXVideoDec * self)
     self->out_port_pool =
         gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->dec, port,
         self->dmabuf ? GST_OMX_BUFFER_MODE_DMABUF :
-        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY);
+        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY, self->isubwc);
 
 
   if (caps) {
@@ -3280,6 +3303,7 @@ gst_omx_video_dec_disable (GstOMXVideoDec * self)
      * The exception is for buffer sharing above and the event
      * OMX_EventPortNeedsDisable will be sent to request disabling the
      * other port at the same time. */
+    out_port->fmt_settings_cookie++;
     if (!self->dynamic_input_buffer_mode) {
       if (gst_omx_port_set_enabled (self->dec_in_port, FALSE) != OMX_ErrorNone)
         return FALSE;

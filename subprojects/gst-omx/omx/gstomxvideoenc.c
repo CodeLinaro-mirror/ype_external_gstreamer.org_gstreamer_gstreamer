@@ -4281,7 +4281,7 @@ create_input_pool (GstOMXVideoEnc * self, GstCaps * caps, guint num_buffers)
 
   pool =
       gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->enc,
-      self->enc_in_port, GST_OMX_BUFFER_MODE_DMABUF);
+      self->enc_in_port, GST_OMX_BUFFER_MODE_DMABUF, self->isubwc);
 
   g_signal_connect_object (pool, "allocate",
       G_CALLBACK (pool_request_allocate_cb), self, 0);

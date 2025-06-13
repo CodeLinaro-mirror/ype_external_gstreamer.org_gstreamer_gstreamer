@@ -30,7 +30,6 @@
 #include <gst/video/gstvideodecoder.h>
 
 #include "gstomx.h"
-
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dlfcn.h>
@@ -114,7 +113,6 @@ struct _GstOMXVideoDec
   gboolean deinterlace_mode;
   gboolean omx_skipcropupdate;
   guint dynamic_input_buffer_mode;
-
   void* gbm_lib;
   struct gbm_device * (*gbm_api_create_device)(int fd);
   void (*gbm_api_device_destroy)(struct gbm_device *gbm_dev);
@@ -127,6 +125,7 @@ struct _GstOMXVideoDec
   gboolean isubwc;
   gboolean is10bit;
   gboolean secure;
+  gboolean multi_resolution;
 };
 
 struct _GstOMXVideoDecClass
