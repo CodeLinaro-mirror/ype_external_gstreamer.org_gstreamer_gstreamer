@@ -58,9 +58,7 @@
 #include "gstomxallocator.h"
 #include <vidc/media/msm_media_info.h>
 
-#ifdef USE_GBM
 static G_DEFINE_QUARK (FBufModifierQuark, gst_fbuf_modifier_qdata);
-#endif
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_video_dec_debug_category);
 #define GST_CAT_DEFAULT gst_omx_video_dec_debug_category
@@ -178,7 +176,6 @@ ERR:
   g_slice_free (OMX_DECODER_OUT_BUFFER, pOutBuf);
 }
 
-#ifdef USE_GBM
 static void modifier_free(gpointer p_modifier)
 {
   GST_DEBUG("modifier_free(%p) val 0x%llx called", p_modifier, p_modifier ? *(guint64*)p_modifier : DRM_FORMAT_MOD_INVALID);
@@ -227,7 +224,6 @@ static guint64* attach_new_modifier(GstOMXVideoDec* dec, GstBuffer* gstbuf, GstV
   }
   return NULL;
 }
-#endif
 
 static GstBuffer *
 _omx_out_buffer_create (GstOMXVideoDec * dec, GstOMXBuffer * pBuffer)
@@ -296,9 +292,7 @@ _omx_out_buffer_create (GstOMXVideoDec * dec, GstOMXBuffer * pBuffer)
       "gst out time: %" GST_TIME_FORMAT ", omx time: %" G_GINT64_FORMAT,
       GST_TIME_ARGS (out_buf->pts), pBuffer->omx_buf->nTimeStamp);
 
-#ifdef USE_GBM
     attach_new_modifier(dec, out_buf, vinfo, pPMEMInfo);//out_buf is always new, then, always need to attach modifier
-#endif
 
     /* only add videometa on the buffer for NV12 for later map */
     if (GST_VIDEO_INFO_FORMAT (vinfo) ==  GST_VIDEO_FORMAT_P010_10LE) {
@@ -336,11 +330,7 @@ _omx_out_buffer_create (GstOMXVideoDec * dec, GstOMXBuffer * pBuffer)
       gstVMeta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
       gstVMeta->offset[3] = pPMEMInfo->size;
       gstVMeta->stride[2] = pPMEMInfo->pmem_fd;
-#ifdef USE_GBM
       gstVMeta->stride[3] = pPMEMInfo->pmeta_fd;
-#else
-      gstVMeta->stride[3] = -1;
-#endif
       GST_INFO_OBJECT (dec, "Add ion/gbm fd %d, meta fd %d, sz %d with signature QaUT in GstVideoMeta", pPMEMInfo->pmem_fd, gstVMeta->stride[3], pPMEMInfo->size);
     }else{
       GST_ERROR_OBJECT (dec, "gst_buffer_add_video_meta_full() fail, ret NULL");
@@ -409,7 +399,6 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
     "gst out time in update_output_buffer() %" GST_TIME_FORMAT ", omx time: %" G_GINT64_FORMAT,
     GST_TIME_ARGS (out_buf->pts), pBuffer->omx_buf->nTimeStamp);
 
-#ifdef USE_GBM
   //That gstreamer buf is probably already attached modifier, check it at first.
   //As modifier only store some usage info. like ubwc and security, common event like resolution change won't change modifier.
   //Therefore, if already attached modifier, needn't update or re-attach it.
@@ -466,7 +455,6 @@ static gboolean update_output_buffer (GstOMXVideoDec * dec, GstOMXBuffer * pBuff
         vmeta->offset[1]);
     }
   }
-#endif
 
 done:
   gst_video_codec_state_unref (state);
@@ -662,7 +650,6 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   self->omx_skipcropupdate = GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT;
   self->dynamic_input_buffer_mode = GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT;
 
-#ifdef USE_GBM
   self->gbm_dev_fd = -1;
   self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
   GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
@@ -711,7 +698,6 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
     self->gbm_lib = NULL;
     return;
   }
-#endif
 }
 
 #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
@@ -1028,7 +1014,6 @@ gst_omx_video_dec_finalize (GObject * object)
   g_mutex_clear (&self->drain_lock);
   g_cond_clear (&self->drain_cond);
 
-#ifdef USE_GBM
   if (self->gbm_dev && self->gbm_api_device_destroy) {
     GST_INFO("gbm destroy device %p", self->gbm_dev);
     self->gbm_api_device_destroy(self->gbm_dev);
@@ -1041,7 +1026,6 @@ gst_omx_video_dec_finalize (GObject * object)
     GST_INFO("dlclose gbm lib %p", self->gbm_lib);
     dlclose(self->gbm_lib);
   }
-#endif
 
   G_OBJECT_CLASS (gst_omx_video_dec_parent_class)->finalize (object);
 }

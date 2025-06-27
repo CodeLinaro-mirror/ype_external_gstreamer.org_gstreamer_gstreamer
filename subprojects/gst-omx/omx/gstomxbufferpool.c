@@ -447,11 +447,7 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
         meta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
         meta->offset[3] = pPMEMInfo ? pPMEMInfo->size : 0;
         meta->stride[2] = pPMEMInfo ? pPMEMInfo->pmem_fd : -1;
-#ifdef USE_GBM
         meta->stride[3] = pPMEMInfo ? pPMEMInfo->pmeta_fd: -1;
-#else
-        meta->stride[3] = -1;
-#endif
         GST_INFO_OBJECT (pool,"Add ion-gbm fd %d, meta fd %d, sz %d with signature QaUT in GstVideoMeta\n", meta->stride[2], meta->stride[3], meta->offset[3]);
       } else {
         GST_ERROR_OBJECT (pool, "gst_buffer_add_video_meta_full() fail, ret NULL");

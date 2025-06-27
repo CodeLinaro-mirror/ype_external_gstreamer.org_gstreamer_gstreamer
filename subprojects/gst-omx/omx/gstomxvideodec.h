@@ -31,13 +31,11 @@
 
 #include "gstomx.h"
 
-#ifdef USE_GBM
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dlfcn.h>
 #include "gbm.h"
 #include "gbm_priv.h"
-#endif
 
 G_BEGIN_DECLS
 
@@ -116,7 +114,7 @@ struct _GstOMXVideoDec
   gboolean deinterlace_mode;
   gboolean omx_skipcropupdate;
   guint dynamic_input_buffer_mode;
-#ifdef USE_GBM
+
   void* gbm_lib;
   struct gbm_device * (*gbm_api_create_device)(int fd);
   void (*gbm_api_device_destroy)(struct gbm_device *gbm_dev);
@@ -125,7 +123,6 @@ struct _GstOMXVideoDec
   guint64 (*gbm_api_bo_get_modifier)(struct gbm_bo *bo);
   int gbm_dev_fd;
   struct gbm_device* gbm_dev;
-#endif
 
   gboolean isubwc;
   gboolean is10bit;
