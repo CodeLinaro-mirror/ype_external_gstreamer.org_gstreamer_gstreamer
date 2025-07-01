@@ -126,6 +126,7 @@ struct _GstOMXVideoDec
 
   gboolean isubwc;
   gboolean is10bit;
+  gboolean secure;
 };
 
 struct _GstOMXVideoDecClass

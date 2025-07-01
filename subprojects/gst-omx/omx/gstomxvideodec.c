@@ -100,6 +100,7 @@ enum
   PROP_INTERNAL_ENTROPY_BUFFERS,
   PROP_OUTPUT_PICTURE_ORDER,
   PROP_LOW_LATENCY,
+  PROP_SECURE,
   PROP_DEINTERLACE,
   PROP_SKIPCROPUPDATE,
   PROP_DYNAMIC_INPUT_BUFFER,
@@ -108,6 +109,7 @@ enum
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
 #define GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT    (0xffffffff)
 #define GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT          (FALSE)
+#define GST_OMX_VIDEO_DEC_SECURE_PLAYBACK_DEFAULT          (FALSE)
 #define GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT          (TRUE)
 #define GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT            (TRUE)
 #define GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT          (0)
@@ -481,6 +483,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_LOW_LATENCY:
       self->low_latency_mode = g_value_get_boolean (value);
       break;
+    case PROP_SECURE:
+      self->secure = g_value_get_boolean (value);
+      break;
     case PROP_DEINTERLACE:
       self->deinterlace_mode = g_value_get_boolean (value);
       break;
@@ -513,6 +518,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_LOW_LATENCY:
       g_value_set_boolean (value, self->low_latency_mode);
+      break;
+    case PROP_SECURE:
+      g_value_set_boolean (value, self->secure);
       break;
     case PROP_DEINTERLACE:
       g_value_set_boolean (value, self->deinterlace_mode);
@@ -550,6 +558,15 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
 #endif
+
+  g_object_class_install_property (gobject_class, PROP_SECURE,
+      g_param_spec_boolean ("secure", "Secure playback mode",
+          "If enabled, the output and input buffer will be secure,"
+          " so the two buffers copying are forbidden."
+          " Under secure mode, output is always UBWC.",
+          GST_OMX_VIDEO_DEC_SECURE_PLAYBACK_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
 
   g_object_class_install_property (gobject_class, PROP_OUTPUT_PICTURE_ORDER,
       g_param_spec_uint ("output-picture-order-mode", "output picture order mode",
@@ -646,6 +663,7 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   g_cond_init (&self->drain_cond);
   self->output_picture_order_mode = GST_OMX_VIDEO_DEC_OUTPUT_PICTURE_ORDER_MODE_DEFAULT;
   self->low_latency_mode = GST_OMX_VIDEO_DEC_LOW_LATENCY_MODE_DEFAULT;
+  self->secure = GST_OMX_VIDEO_DEC_SECURE_PLAYBACK_DEFAULT;
   self->deinterlace_mode = GST_OMX_VIDEO_DEC_DEINTERLACE_MODE_DEFAULT;
   self->omx_skipcropupdate = GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT;
   self->dynamic_input_buffer_mode = GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT;
@@ -745,12 +763,31 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
   GstOMXVideoDec *self = GST_OMX_VIDEO_DEC (decoder);
   GstOMXVideoDecClass *klass = GST_OMX_VIDEO_DEC_GET_CLASS (self);
   gint in_port_index, out_port_index;
+  const gchar *component_name = NULL;
 
   GST_DEBUG_OBJECT (self, "Opening decoder");
 
+  if (self->secure) {
+    if (!strncmp(klass->cdata.component_name, "OMX.qcom.video.decoder.avc",
+                OMX_MAX_STRINGNAME_SIZE)) {
+      component_name = "OMX.qcom.video.decoder.avc.secure";
+    } else if (!strncmp(klass->cdata.component_name, "OMX.qcom.video.decoder.mpeg2",
+                OMX_MAX_STRINGNAME_SIZE)) {
+      component_name = "OMX.qcom.video.decoder.mpeg2.secure";
+    } else if (!strncmp(klass->cdata.component_name, "OMX.qcom.video.decoder.hevc",
+                OMX_MAX_STRINGNAME_SIZE)) {
+      component_name = "OMX.qcom.video.decoder.hevc.secure";
+    } else if (!strncmp(klass->cdata.component_name, "OMX.qcom.video.decoder.vp9",
+                OMX_MAX_STRINGNAME_SIZE)) {
+      component_name = "OMX.qcom.video.decoder.vp9.secure";
+    }
+  } else {
+    component_name = klass->cdata.component_name;
+  }
+
   self->dec =
       gst_omx_component_new (GST_OBJECT_CAST (self), klass->cdata.core_name,
-      klass->cdata.component_name, klass->cdata.component_role,
+      component_name, klass->cdata.component_role,
       klass->cdata.hacks);
   self->started = FALSE;
 
