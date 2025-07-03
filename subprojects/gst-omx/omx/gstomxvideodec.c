@@ -51,6 +51,8 @@
 #include "gstomxbufferpool.h"
 #include "gstomxvideo.h"
 #include "gstomxvideodec.h"
+#include "gstomxmpeg2videodec.h"
+#include "gstomxh264dec.h"
 #ifdef _OMX_ZERO_MEMCOPY_RENDERING_
 #include "OMX_QCOMExtns.h"
 #endif
@@ -1907,6 +1909,15 @@ gst_omx_video_dec_get_output_interlace_info (GstOMXVideoDec * self)
   }
 
 #endif
+  if (!self->deinterlace_mode) {
+    if (GST_IS_OMX_MPEG2_VIDEO_DEC(self)) {
+      GST_INFO_OBJECT (self, "deinterlace false and mpeg2dec, set interlace mode as fields!");
+      return GST_VIDEO_INTERLACE_MODE_FIELDS;
+    } else if (GST_IS_OMX_H264_DEC(self)) {
+      GST_INFO_OBJECT (self, "deinterlace false and h264dec, set interlace mode as mixed!");
+      return GST_VIDEO_INTERLACE_MODE_MIXED;
+    }
+  }
   return GST_VIDEO_INTERLACE_MODE_PROGRESSIVE;
 }
 
