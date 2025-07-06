@@ -444,11 +444,7 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
           GST_VIDEO_INFO_HEIGHT (&pool->video_info),
           GST_VIDEO_INFO_N_PLANES (&pool->video_info), offset, stride);
       if (meta) {
-        meta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
-        meta->offset[3] = pPMEMInfo ? pPMEMInfo->size : 0;
-        meta->stride[2] = pPMEMInfo ? pPMEMInfo->pmem_fd : -1;
-        meta->stride[3] = pPMEMInfo ? pPMEMInfo->pmeta_fd: -1;
-        GST_INFO_OBJECT (pool,"Add ion-gbm fd %d, meta fd %d, sz %d with signature QaUT in GstVideoMeta\n", meta->stride[2], meta->stride[3], meta->offset[3]);
+        GST_INFO_OBJECT (pool,"Add GstVideoMeta Successfully");
       } else {
         GST_ERROR_OBJECT (pool, "gst_buffer_add_video_meta_full() fail, ret NULL");
         return GST_FLOW_ERROR;

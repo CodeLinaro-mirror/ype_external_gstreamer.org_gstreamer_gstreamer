@@ -331,11 +331,7 @@ _omx_out_buffer_create (GstOMXVideoDec * dec, GstOMXBuffer * pBuffer)
         GST_VIDEO_INFO_HEIGHT (vinfo), GST_VIDEO_INFO_N_PLANES (vinfo),
         offsets, strides);
     if (gstVMeta) {
-      gstVMeta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
-      gstVMeta->offset[3] = pPMEMInfo->size;
-      gstVMeta->stride[2] = pPMEMInfo->pmem_fd;
-      gstVMeta->stride[3] = pPMEMInfo->pmeta_fd;
-      GST_INFO_OBJECT (dec, "Add ion/gbm fd %d, meta fd %d, sz %d with signature QaUT in GstVideoMeta", pPMEMInfo->pmem_fd, gstVMeta->stride[3], pPMEMInfo->size);
+      GST_INFO_OBJECT (dec, "Add GstVideoMeta Succeed");
     }else{
       GST_ERROR_OBJECT (dec, "gst_buffer_add_video_meta_full() fail, ret NULL");
       goto create_fail;
