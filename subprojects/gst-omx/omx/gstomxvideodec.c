@@ -3280,16 +3280,18 @@ gst_omx_video_dec_disable (GstOMXVideoDec * self)
      * The exception is for buffer sharing above and the event
      * OMX_EventPortNeedsDisable will be sent to request disabling the
      * other port at the same time. */
-    if (gst_omx_port_set_enabled (self->dec_in_port, FALSE) != OMX_ErrorNone)
-      return FALSE;
-    if (gst_omx_port_wait_buffers_released (self->dec_in_port,
-            5 * GST_SECOND) != OMX_ErrorNone)
-      return FALSE;
-    if (gst_omx_port_deallocate_buffers (self->dec_in_port) != OMX_ErrorNone)
-      return FALSE;
-    if (gst_omx_port_wait_enabled (self->dec_in_port,
-            1 * GST_SECOND) != OMX_ErrorNone)
-      return FALSE;
+    if (!self->dynamic_input_buffer_mode) {
+      if (gst_omx_port_set_enabled (self->dec_in_port, FALSE) != OMX_ErrorNone)
+        return FALSE;
+      if (gst_omx_port_wait_buffers_released (self->dec_in_port,
+              5 * GST_SECOND) != OMX_ErrorNone)
+        return FALSE;
+      if (gst_omx_port_deallocate_buffers (self->dec_in_port) != OMX_ErrorNone)
+        return FALSE;
+      if (gst_omx_port_wait_enabled (self->dec_in_port,
+              1 * GST_SECOND) != OMX_ErrorNone)
+        return FALSE;
+    }
 
     if (gst_omx_port_set_enabled (out_port, FALSE) != OMX_ErrorNone)
       return FALSE;
@@ -3451,12 +3453,14 @@ gst_omx_video_dec_enable (GstOMXVideoDec * self, GstBuffer * input)
       input);
 
   if (self->disabled) {
-    if (!gst_omx_video_dec_ensure_nb_in_buffers (self))
-      return FALSE;
-    if (gst_omx_port_set_enabled (self->dec_in_port, TRUE) != OMX_ErrorNone)
-      return FALSE;
-    if (!gst_omx_video_dec_allocate_in_buffers (self))
-      return FALSE;
+    if (!self->dynamic_input_buffer_mode) {
+      if (!gst_omx_video_dec_ensure_nb_in_buffers (self))
+        return FALSE;
+      if (gst_omx_port_set_enabled (self->dec_in_port, TRUE) != OMX_ErrorNone)
+        return FALSE;
+      if (!gst_omx_video_dec_allocate_in_buffers (self))
+        return FALSE;
+    }
 
     if ((klass->cdata.hacks & GST_OMX_HACK_NO_DISABLE_OUTPORT)) {
       if (gst_omx_port_set_enabled (self->dec_out_port, TRUE) != OMX_ErrorNone)
@@ -3469,11 +3473,13 @@ gst_omx_video_dec_enable (GstOMXVideoDec * self, GstBuffer * input)
         return FALSE;
     }
 
-    if (gst_omx_port_wait_enabled (self->dec_in_port,
-            5 * GST_SECOND) != OMX_ErrorNone)
-      return FALSE;
-    if (gst_omx_port_mark_reconfigured (self->dec_in_port) != OMX_ErrorNone)
-      return FALSE;
+    if (!self->dynamic_input_buffer_mode) {
+      if (gst_omx_port_wait_enabled (self->dec_in_port,
+              5 * GST_SECOND) != OMX_ErrorNone)
+        return FALSE;
+      if (gst_omx_port_mark_reconfigured (self->dec_in_port) != OMX_ErrorNone)
+        return FALSE;
+    }
   } else {
     if (!gst_omx_video_dec_negotiate (self))
       GST_LOG_OBJECT (self, "Negotiation failed, will get output format later");
@@ -4000,7 +4006,8 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
     } else if (acq_ret == GST_OMX_ACQUIRE_BUFFER_FLUSHING) {
       GST_VIDEO_DECODER_STREAM_LOCK (self);
       goto flushing;
-    } else if (acq_ret == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE) {
+    } else if (acq_ret == GST_OMX_ACQUIRE_BUFFER_RECONFIGURE
+              && !self->dynamic_input_buffer_mode) {
       /* Reallocate all buffers */
       err = gst_omx_port_set_enabled (port, FALSE);
       if (err != OMX_ErrorNone) {
