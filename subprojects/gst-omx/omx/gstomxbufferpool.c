@@ -426,8 +426,8 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
       int fd = -1, meta_fd = -1;
 
       gbmbufinfo.fd = pPMEMInfo->pmem_fd;
-      gbmbufinfo.width = GST_VIDEO_INFO_WIDTH (&pool->video_info);
-      gbmbufinfo.height = GST_VIDEO_INFO_HEIGHT (&pool->video_info);
+      gbmbufinfo.width = pool->port->port_def.format.video.nFrameWidth;
+      gbmbufinfo.height = pool->port->port_def.format.video.nFrameHeight;
       switch (GST_VIDEO_INFO_FORMAT (&pool->video_info)) {
         case GST_VIDEO_FORMAT_NV12:
           gbmbufinfo.format = GBM_FORMAT_NV12;
