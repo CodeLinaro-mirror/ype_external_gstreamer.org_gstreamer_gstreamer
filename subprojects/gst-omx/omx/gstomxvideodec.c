@@ -3984,6 +3984,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
   gboolean header =
       GST_BUFFER_FLAG_IS_SET (frame->input_buffer, GST_BUFFER_FLAG_HEADER);
   gboolean subframe_mode = gst_video_decoder_get_subframe_mode (decoder);
+  gboolean input_external_buf_temporarily_disabled = FALSE;
 
   self = GST_OMX_VIDEO_DEC (decoder);
 
@@ -4105,6 +4106,20 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
 
     if (self->codec_data) {
       GST_DEBUG_OBJECT (self, "Passing codec data to the component");
+      if (self->dynamic_input_buffer_mode && !input_external_buf_temporarily_disabled) {
+        OMX_VENDOR_DEC_INPUT_EXTERNAL_BUF param;
+        OMX_ERRORTYPE err;
+        GST_OMX_INIT_STRUCT(&param);
+        param.enable = OMX_FALSE;
+        err = gst_omx_component_set_config(self->dec, OMX_IndexVendorDecInputExternalBuf,
+            (OMX_PTR)&param);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT(self, "Failed to set dec input external buf disable, err 0x%08x", err);
+        } else {
+          GST_INFO_OBJECT(self, "Due to codec_data, temporarily disable input external buf mode successful");
+        }
+        input_external_buf_temporarily_disabled = TRUE;
+      }
 
       codec_data = self->codec_data;
 
@@ -4146,6 +4161,21 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
         goto release_error;
       /* Acquire new buffer for the actual frame */
       continue;
+    } else {
+      if (self->dynamic_input_buffer_mode && input_external_buf_temporarily_disabled) {
+        OMX_VENDOR_DEC_INPUT_EXTERNAL_BUF param;
+        OMX_ERRORTYPE err;
+        GST_OMX_INIT_STRUCT(&param);
+        param.enable = OMX_TRUE;
+        err = gst_omx_component_set_config(self->dec, OMX_IndexVendorDecInputExternalBuf,
+            (OMX_PTR)&param);
+        if (err != OMX_ErrorNone) {
+          GST_ERROR_OBJECT(self, "Failed to set dec input external buf enable, err 0x%08x", err);
+        } else {
+          GST_INFO_OBJECT(self, "codec_data has been processed, recover input external buf mode successful");
+        }
+        input_external_buf_temporarily_disabled = FALSE;
+      }
     }
 
     /* Now handle the frame */
