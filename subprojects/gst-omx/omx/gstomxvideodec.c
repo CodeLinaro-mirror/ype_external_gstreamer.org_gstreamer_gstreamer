@@ -1460,7 +1460,8 @@ gst_omx_video_dec_allocate_output_buffers (GstOMXVideoDec * self)
     self->out_port_pool =
         gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->dec, port,
         self->dmabuf ? GST_OMX_BUFFER_MODE_DMABUF :
-        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY, self->isubwc);
+        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY, self->isubwc,
+        self->gbm_lib, self->gbm_dev);
 
 #if defined (HAVE_GST_GL)
   if (eglimage) {
@@ -2473,7 +2474,8 @@ gst_omx_video_dec_allocate_outport_omx_buffers (GstOMXVideoDec * self)
     self->out_port_pool =
         gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->dec, port,
         self->dmabuf ? GST_OMX_BUFFER_MODE_DMABUF :
-        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY, self->isubwc);
+        GST_OMX_BUFFER_MODE_SYSTEM_MEMORY, self->isubwc,
+        self->gbm_lib, self->gbm_dev);
 
 
   if (caps) {
