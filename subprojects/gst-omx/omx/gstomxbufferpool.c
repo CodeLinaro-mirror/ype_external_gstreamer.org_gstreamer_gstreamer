@@ -200,7 +200,7 @@ _gst_omx_gbm_bo_destroy (gpointer data, gpointer user_data)
   GstOMXBufferPool *pool = (GstOMXBufferPool *) user_data;
   struct gbm_bo *gbmbo = (struct gbm_bo *)data;
 
-  GST_INFO ("destroy gbm bo:0x%x ", gbmbo);
+  GST_INFO ("destroying gbm bo: %p", gbmbo);
   pool->gbm_bo_destroy(gbmbo);
 }
 
@@ -208,7 +208,7 @@ static void
 _gst_omx_dup_fd_close (gpointer data, gpointer user_data)
 {
   gint fd = data;
-  GST_INFO ("close dup fd:%d ", fd);
+  GST_INFO ("closing dup fd: %d", fd);
   close (fd);
 }
 
@@ -445,17 +445,18 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
       if (GST_VIDEO_INFO_FORMAT (&pool->video_info) == GST_VIDEO_FORMAT_NV12 && pool->is_ubwc) {
         gbmflags |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       }
-      if (!pool->gbmdev)
+      if (!(pool->gbmdev && pool->gbm_bo_import && pool->gbm_bo_get_fd && pool->gbm_perform && pool->gbm_bo_destroy))
       {
+        GST_ERROR_OBJECT(pool, "Error: some gbm pointer is NULL %p, %p %p %p %p", pool->gbmdev, pool->gbm_bo_import, pool->gbm_bo_get_fd, pool->gbm_perform, pool->gbm_bo_destroy);
         return GST_FLOW_ERROR;
       }
       gbmbo = pool->gbm_bo_import (pool->gbmdev, GBM_BO_IMPORT_FD, &gbmbufinfo, gbmflags);
-      GST_INFO_OBJECT(pool, "import gbm(dev %p, input pixel fd %d, meta fd %d, \
-          flags 0x%08x) ret %p", pool->gbmdev, pPMEMInfo->pmem_fd,
+      GST_INFO_OBJECT(pool, "import gbm(dev %p, input pixel fd %d, meta fd %d, "
+          "flags 0x%08x) ret %p", pool->gbmdev, pPMEMInfo->pmem_fd,
           pPMEMInfo->pmeta_fd, gbmflags, gbmbo);
       if (gbmbo == NULL) {
-        GST_ERROR_OBJECT(pool, "call gbm_bo_import(%p, GBM_BO_IMPORT_FD) fail, ret NULL, \
-            input pixel fd %d, meta fd %d, flags 0x%08x", pool->gbmdev, pPMEMInfo->pmem_fd,
+        GST_ERROR_OBJECT(pool, "call gbm_bo_import(%p, GBM_BO_IMPORT_FD) fail, ret NULL, "
+            "input pixel fd %d, meta fd %d, flags 0x%08x", pool->gbmdev, pPMEMInfo->pmem_fd,
             pPMEMInfo->pmeta_fd, gbmflags);
         return GST_FLOW_ERROR;
       }
@@ -827,13 +828,13 @@ gst_omx_buffer_pool_new (GstElement * element, GstOMXComponent * component,
   pool->port = port;
   pool->output_mode = output_mode;
   pool->is_ubwc = is_ubwc;
+  pool->allocator = gst_omx_allocator_new (component, port);
   if (gbm_lib && gbmdev) {
     pool->gbmdev = gbmdev;
     pool->gbm_bo_import = dlsym(gbm_lib, "gbm_bo_import");
     pool->gbm_bo_get_fd = dlsym(gbm_lib, "gbm_bo_get_fd");
     pool->gbm_perform = dlsym(gbm_lib, "gbm_perform");
     pool->gbm_bo_destroy = dlsym(gbm_lib, "gbm_bo_destroy");
-    pool->allocator = gst_omx_allocator_new (component, port);
   }
 
   g_signal_connect_object (pool->allocator, "omxbuf-released",
