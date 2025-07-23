@@ -523,7 +523,7 @@ gst_omx_allocator_allocate (GstOMXAllocator * allocator, gint index,
         fd = g_ptr_array_index (allocator->dup_fds, index);
         GST_DEBUG_OBJECT (allocator, "foreign_mem fd:%d, dup fd:%d", pPMEMInfo->pmem_fd, fd);
         mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd,
-            pPMEMInfo->size, GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+            pPMEMInfo->size, GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
       } else {
         fd = pPMEMInfo->pmem_fd;
         mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd, pPMEMInfo->size,

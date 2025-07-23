@@ -209,7 +209,7 @@ _gst_omx_dup_fd_close (gpointer data, gpointer user_data)
 {
   gint fd = data;
   GST_INFO ("closing dup fd: %d", fd);
-  close (fd);
+  BUFFER_POOL_CLOSE_FD(fd);
 }
 
 static gboolean
