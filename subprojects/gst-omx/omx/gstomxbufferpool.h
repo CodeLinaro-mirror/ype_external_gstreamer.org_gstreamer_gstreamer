@@ -90,7 +90,6 @@ struct _GstOMXBufferPool
   /* gbm is for dec multi-resolution stream */
   struct gbm_bo* (*gbm_bo_import)(struct gbm_device *gbm_dev, uint32_t type, void* buffer, uint32_t usage);
   int (*gbm_bo_get_fd)(struct gbm_bo *bo);
-  int (*gbm_perform)(int operation,...);
   void (*gbm_bo_destroy)(struct gbm_bo *bo);
   struct gbm_device* gbmdev;
 };

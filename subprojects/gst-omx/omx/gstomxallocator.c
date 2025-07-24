@@ -320,8 +320,6 @@ gst_omx_allocator_set_active (GstOMXAllocator * allocator, gboolean active)
       if (allocator->port->multi_resolution) {
         allocator->gbmbos = g_ptr_array_sized_new (allocator->n_memories);
         g_ptr_array_set_size (allocator->gbmbos, allocator->n_memories);
-        allocator->dup_meta_fds = g_ptr_array_sized_new (allocator->n_memories);
-        g_ptr_array_set_size (allocator->dup_meta_fds, allocator->n_memories);
         allocator->dup_fds = g_ptr_array_sized_new (allocator->n_memories);
         g_ptr_array_set_size (allocator->dup_fds, allocator->n_memories);
       }

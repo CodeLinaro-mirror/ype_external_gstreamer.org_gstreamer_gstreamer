@@ -227,14 +227,12 @@ gst_omx_buffer_pool_stop (GstBufferPool * bpool)
   if(pool->port->multi_resolution) {
     GstOMXAllocator *allocator = pool->allocator;
 
-    g_ptr_array_foreach (allocator->gbmbos, (GFunc) _gst_omx_gbm_bo_destroy, pool);
-    g_ptr_array_free (allocator->gbmbos, TRUE);
-    allocator->gbmbos = NULL;
-    g_ptr_array_free (allocator->dup_meta_fds, TRUE);
-    allocator->dup_meta_fds = NULL;
     g_ptr_array_foreach (allocator->dup_fds, (GFunc) _gst_omx_dup_fd_close, NULL);
     g_ptr_array_free (allocator->dup_fds, TRUE);
     allocator->dup_fds = NULL;
+    g_ptr_array_foreach (allocator->gbmbos, (GFunc) _gst_omx_gbm_bo_destroy, pool);
+    g_ptr_array_free (allocator->gbmbos, TRUE);
+    allocator->gbmbos = NULL;
   }
 
   gst_omx_allocator_set_active (pool->allocator, FALSE);
@@ -423,7 +421,7 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
       struct gbm_import_fd_data gbmbufinfo = {0};
       guint gbmflags = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
       GstOMXAllocator *allocator = pool->allocator;
-      int fd = -1, meta_fd = -1;
+      int fd = -1;
 
       gbmbufinfo.fd = pPMEMInfo->pmem_fd;
       gbmbufinfo.width = pool->port->port_def.format.video.nFrameWidth;
@@ -439,15 +437,17 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
           gbmbufinfo.format = GBM_FORMAT_P010;
           break;
         default:
+          GST_WARNING_OBJECT (pool, "Unknown format %d, set gbmbuf format to nv12",
+              GST_VIDEO_INFO_FORMAT (&pool->video_info));
           gbmbufinfo.format = GBM_FORMAT_NV12;
       }
 
       if (GST_VIDEO_INFO_FORMAT (&pool->video_info) == GST_VIDEO_FORMAT_NV12 && pool->is_ubwc) {
         gbmflags |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
       }
-      if (!(pool->gbmdev && pool->gbm_bo_import && pool->gbm_bo_get_fd && pool->gbm_perform && pool->gbm_bo_destroy))
-      {
-        GST_ERROR_OBJECT(pool, "Error: some gbm pointer is NULL %p, %p %p %p %p", pool->gbmdev, pool->gbm_bo_import, pool->gbm_bo_get_fd, pool->gbm_perform, pool->gbm_bo_destroy);
+      if (!(pool->gbmdev && pool->gbm_bo_import && pool->gbm_bo_get_fd && pool->gbm_bo_destroy)) {
+        GST_ERROR_OBJECT(pool, "Error: some gbm pointer is NULL %p, %p %p %p",
+            pool->gbmdev, pool->gbm_bo_import, pool->gbm_bo_get_fd, pool->gbm_bo_destroy);
         return GST_FLOW_ERROR;
       }
       gbmbo = pool->gbm_bo_import (pool->gbmdev, GBM_BO_IMPORT_FD, &gbmbufinfo, gbmflags);
@@ -461,16 +461,14 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
         return GST_FLOW_ERROR;
       }
       fd = pool->gbm_bo_get_fd(gbmbo);
-      pool->gbm_perform (GBM_PERFORM_GET_METADATA_ION_FD, gbmbo, &meta_fd);
-      GST_INFO_OBJECT(pool, "imported gbm, get imported fd %d, imported meta fd %d", fd, meta_fd);
-      if (fd < 0 || meta_fd < 0) {
-        GST_ERROR_OBJECT(pool, "got imported fd %d, meta fd %d, fail", fd, meta_fd);
+      GST_INFO_OBJECT(pool, "imported gbmbo %p, get imported fd %d", gbmbo, fd);
+      if (fd < 0) {
+        GST_ERROR_OBJECT(pool, "got imported fd from gbmbo %p fail, ret %d", gbmbo, fd);
         pool->gbm_bo_destroy(gbmbo);
         return GST_FLOW_ERROR;
       }
 
       g_ptr_array_index (allocator->dup_fds, pool->current_buffer_index) = fd;
-      g_ptr_array_index (allocator->dup_meta_fds, pool->current_buffer_index) = meta_fd;
       g_ptr_array_index (allocator->gbmbos, pool->current_buffer_index) = gbmbo;
     }
 
@@ -833,7 +831,6 @@ gst_omx_buffer_pool_new (GstElement * element, GstOMXComponent * component,
     pool->gbmdev = gbmdev;
     pool->gbm_bo_import = dlsym(gbm_lib, "gbm_bo_import");
     pool->gbm_bo_get_fd = dlsym(gbm_lib, "gbm_bo_get_fd");
-    pool->gbm_perform = dlsym(gbm_lib, "gbm_perform");
     pool->gbm_bo_destroy = dlsym(gbm_lib, "gbm_bo_destroy");
   }
 

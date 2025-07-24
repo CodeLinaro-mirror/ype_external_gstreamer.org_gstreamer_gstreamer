@@ -81,7 +81,6 @@ struct _GstOMXAllocator
   GPtrArray *memories;
   guint n_memories;
   GPtrArray *gbmbos;
-  GPtrArray *dup_meta_fds;
   GPtrArray *dup_fds;
 
   guint n_outstanding;
