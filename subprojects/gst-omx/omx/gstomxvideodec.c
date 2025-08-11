@@ -4105,7 +4105,7 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
       goto flow_error;
     }
 
-    if (self->codec_data) {
+    if (self->codec_data && !self->dynamic_input_buffer_mode) {
       GST_DEBUG_OBJECT (self, "Passing codec data to the component");
 
       codec_data = self->codec_data;
