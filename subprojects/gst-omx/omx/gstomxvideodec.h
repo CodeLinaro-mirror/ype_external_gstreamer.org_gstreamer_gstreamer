@@ -126,6 +126,7 @@ struct _GstOMXVideoDec
   gboolean is10bit;
   gboolean secure;
   gboolean multi_resolution;
+  guint input_buffer_size_limit;
 };
 
 struct _GstOMXVideoDecClass

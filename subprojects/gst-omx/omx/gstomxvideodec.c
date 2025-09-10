@@ -107,6 +107,7 @@ enum
   PROP_SKIPCROPUPDATE,
   PROP_DYNAMIC_INPUT_BUFFER,
   PROP_MULTI_RESOLUTION,
+  PROP_INPUT_BUFFER_SIZE_LIMIT,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
@@ -117,6 +118,7 @@ enum
 #define GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT            (FALSE)
 #define GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT          (0)
 #define GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT          (TRUE)
+#define GST_OMX_VIDEO_DEC_INPUT_BUFFER_SIZE_LIMIT_DEFAULT      (0)
 /* class initialization */
 
 #define DEBUG_INIT \
@@ -498,6 +500,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_MULTI_RESOLUTION:
       self->multi_resolution = g_value_get_boolean (value);
       break;
+    case PROP_INPUT_BUFFER_SIZE_LIMIT:
+      self->input_buffer_size_limit = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -536,6 +541,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_MULTI_RESOLUTION:
       g_value_set_boolean (value, self->multi_resolution);
+      break;
+    case PROP_INPUT_BUFFER_SIZE_LIMIT:
+      g_value_set_uint (value, self->input_buffer_size_limit);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -617,6 +625,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
           GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_INPUT_BUFFER_SIZE_LIMIT,
+      g_param_spec_uint ("input-buffer-size-limit", "input buffer size limit",
+          "If set to non-zero, omx will set this input size to video driver, "
+          "if this size is smaller than video driver calculated input buf size, video driver/omx will adopt this size to allocate buf and check whether input buf's size >= this size."
+          0, G_MAXUINT, GST_OMX_VIDEO_DEC_INPUT_BUFFER_SIZE_LIMIT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
   element_class->change_state =
       GST_DEBUG_FUNCPTR (gst_omx_video_dec_change_state);
 
@@ -681,6 +696,7 @@ gst_omx_video_dec_init (GstOMXVideoDec * self)
   self->omx_skipcropupdate = GST_OMX_VIDEO_DEC_SKIPCROPUPDATE_DEFAULT;
   self->dynamic_input_buffer_mode = GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT;
   self->multi_resolution = GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT;
+  self->input_buffer_size_limit = GST_OMX_VIDEO_DEC_INPUT_BUFFER_SIZE_LIMIT_DEFAULT;
   self->gbm_dev_fd = -1;
   self->gbm_lib = dlopen("libgbm.so",  RTLD_NOW);
   GST_INFO("dlopen get gbm lib %p", self->gbm_lib);
@@ -967,6 +983,23 @@ gst_omx_video_dec_open (GstVideoDecoder * decoder)
           self->dynamic_input_buffer_mode);
     }
   }
+
+  if (self->input_buffer_size_limit) {
+    QOMX_VIDEO_CUSTOM_BUFFERSIZE param;
+    OMX_ERRORTYPE err;
+    GST_OMX_INIT_STRUCT(&param);
+    param.nPortIndex = self->dec_in_port->index;
+    param.nBufferSize = self->input_buffer_size_limit;
+    err = gst_omx_component_set_parameter(self->dec, OMX_QcomIndexParamVideoCustomBufferSize,
+        (OMX_PTR)&param);
+    if (err != OMX_ErrorNone) {
+      GST_ERROR_OBJECT(self, "Failed to set dec input buffer size limit %d, err 0x%08x",
+          param.nBufferSize, err);
+    } else {
+      GST_INFO_OBJECT(self, "Successfully set dec input buffer size limit %d", param.nBufferSize);
+    }
+  }
+
   return TRUE;
 }
 
@@ -4216,8 +4249,8 @@ gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
             fd, (int)buf->omx_buf->nFilledLen, (int)buf->omx_buf->nAllocLen, maxsize);
         //Actually, omx_buf->nAllocLen should be updated to maxsize. That nAllocLen means that buffer/memory allocated size.
         //Currently, suppose external allocated buf's size equal to omx/driver internal calculated buf size. Later, will improve it.
-        if (maxsize != (guint)buf->omx_buf->nAllocLen) {
-            GST_WARNING_OBJECT(self, "dynamic input buf mode(%u): input mem %p(gstbuf %p) maxsize %u isn't same as omx buf internal calculated size %d !", self->dynamic_input_buffer_mode, gst_mem, frame->input_buffer, maxsize, (int)buf->omx_buf->nAllocLen);
+        if (!(maxsize >= (guint)buf->omx_buf->nAllocLen && (guint)buf->omx_buf->nAllocLen >= size)) {
+            GST_WARNING_OBJECT(self, "dynamic input buf mode(%u): input mem %p(gstbuf %p) don't meet buf size %u >= video internal calculated size %d >= data len %u limit !", self->dynamic_input_buffer_mode, gst_mem, frame->input_buffer, maxsize, (int)buf->omx_buf->nAllocLen, size);
         }
       } else {
         copied = gst_buffer_extract (frame->input_buffer, offset,
