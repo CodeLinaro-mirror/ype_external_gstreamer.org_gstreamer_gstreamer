@@ -628,7 +628,7 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
   g_object_class_install_property (gobject_class, PROP_INPUT_BUFFER_SIZE_LIMIT,
       g_param_spec_uint ("input-buffer-size-limit", "input buffer size limit",
           "If set to non-zero, omx will set this input size to video driver, "
-          "if this size is smaller than video driver calculated input buf size, video driver/omx will adopt this size to allocate buf and check whether input buf's size >= this size."
+          "if this size is smaller than video driver calculated input buf size, video driver/omx will adopt this size to allocate buf and check whether input buf's size >= this size.",
           0, G_MAXUINT, GST_OMX_VIDEO_DEC_INPUT_BUFFER_SIZE_LIMIT_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
