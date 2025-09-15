@@ -3543,9 +3543,6 @@ gst_omx_video_enc_fill_buffer (GstOMXVideoEnc * self, GstBuffer * inbuf,
       data_fd = gst_dmabuf_memory_get_fd (gstmem);
       GST_LOG_OBJECT (self, "found dmabuf fd on input frame gstbuf %p, gst memory %p, data fd %d, no memcpy needed", inbuf, gstmem, data_fd);
       gst_memory_unref (gstmem);
-    }else if (QVMeta && SIG_OF_QVMETA(QVMeta) == GST_MAKE_FOURCC('Q','a','U','T')) {
-      data_fd = FD_OF_QVMETA(QVMeta);
-      GST_LOG_OBJECT (self, "found QaUT signature on input frame gstbuf %p, GstVideoMeta %p, data fd %d, no memcpy needed", inbuf, QVMeta, data_fd);
     }else{
       GST_ERROR_OBJECT (self, "Couldn't directly reuse pixel memory of gstbuf %p from upstream, fail encoding.", inbuf);
       return FALSE;
@@ -4284,7 +4281,8 @@ create_input_pool (GstOMXVideoEnc * self, GstCaps * caps, guint num_buffers)
 
   pool =
       gst_omx_buffer_pool_new (GST_ELEMENT_CAST (self), self->enc,
-      self->enc_in_port, GST_OMX_BUFFER_MODE_DMABUF);
+      self->enc_in_port, GST_OMX_BUFFER_MODE_DMABUF, self->isubwc,
+      NULL, NULL);
 
   g_signal_connect_object (pool, "allocate",
       G_CALLBACK (pool_request_allocate_cb), self, 0);

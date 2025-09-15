@@ -316,6 +316,13 @@ gst_omx_allocator_set_active (GstOMXAllocator * allocator, gboolean active)
     if (active) {
       allocator->memories = g_ptr_array_sized_new (allocator->n_memories);
       g_ptr_array_set_size (allocator->memories, allocator->n_memories);
+
+      if (allocator->port->multi_resolution) {
+        allocator->gbmbos = g_ptr_array_sized_new (allocator->n_memories);
+        g_ptr_array_set_size (allocator->gbmbos, allocator->n_memories);
+        allocator->dup_fds = g_ptr_array_sized_new (allocator->n_memories);
+        g_ptr_array_set_size (allocator->dup_fds, allocator->n_memories);
+      }
     } else {
       if (g_atomic_int_get (&allocator->n_outstanding) == 0)
         gst_omx_allocator_dealloc (allocator);
@@ -509,9 +516,17 @@ gst_omx_allocator_allocate (GstOMXAllocator * allocator, gint index,
         GST_ERROR_OBJECT (allocator, "Read of ionBufInfo from port buffer failed for DMABUF mode.");
         return GST_FLOW_ERROR;
       }
-      fd = pPMEMInfo->pmem_fd;
-      mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd, pPMEMInfo->size,
-          GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+
+      if (allocator->port->multi_resolution) {
+        fd = g_ptr_array_index (allocator->dup_fds, index);
+        GST_DEBUG_OBJECT (allocator, "foreign_mem fd:%d, dup fd:%d", pPMEMInfo->pmem_fd, fd);
+        mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd,
+            pPMEMInfo->size, GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+      } else {
+        fd = pPMEMInfo->pmem_fd;
+        mem->foreign_mem = gst_dmabuf_allocator_alloc_with_flags(allocator->foreign_allocator, fd, pPMEMInfo->size,
+            GST_FD_MEMORY_FLAG_DONT_CLOSE | GST_FD_MEMORY_FLAG_KEEP_MAPPED);
+      }
 #else
       fd = GPOINTER_TO_INT (omx_buf->omx_buf->pBuffer);
       mem->foreign_mem =

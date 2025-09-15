@@ -374,11 +374,13 @@ struct _GstOMXPort {
    */
   gint settings_cookie;
   gint configured_settings_cookie;
+  gint fmt_settings_cookie;
 
   guint pending_bufs_before_rect_change;
   gboolean rect_changed;
   gboolean enc_share_frame_buffer;
   guint dynamic_input_buffer_mode;
+  gboolean multi_resolution;
 };
 
 struct _GstOMXComponent {
@@ -427,7 +429,8 @@ struct _GstOMXBuffer {
 
   /* Cookie of the settings when this buffer was allocated */
   gint settings_cookie;
-
+  /* Cookie of the format settings when this buffer was allocated */
+  gint fmt_settings_cookie;
   /* TRUE if this is an EGLImage */
   gboolean eglimage;
 

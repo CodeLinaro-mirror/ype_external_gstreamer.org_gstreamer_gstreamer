@@ -85,6 +85,13 @@ struct _GstOMXBufferPool
 
   /* The type of buffers produced by the decoder */
   GstOMXBufferMode output_mode;
+  gboolean is_ubwc;
+
+  /* gbm is for dec multi-resolution stream */
+  struct gbm_bo* (*gbm_bo_import)(struct gbm_device *gbm_dev, uint32_t type, void* buffer, uint32_t usage);
+  int (*gbm_bo_get_fd)(struct gbm_bo *bo);
+  void (*gbm_bo_destroy)(struct gbm_bo *bo);
+  struct gbm_device* gbmdev;
 };
 
 struct _GstOMXBufferPoolClass
@@ -94,7 +101,9 @@ struct _GstOMXBufferPoolClass
 
 GType gst_omx_buffer_pool_get_type (void);
 
-GstBufferPool *gst_omx_buffer_pool_new (GstElement * element, GstOMXComponent * component, GstOMXPort * port, GstOMXBufferMode output_mode);
+GstBufferPool *gst_omx_buffer_pool_new (GstElement * element, GstOMXComponent * component,
+    GstOMXPort * port, GstOMXBufferMode output_mode, gboolean is_ubwc,
+    void* gbm_lib, struct gbm_device* gbmdev);
 
 G_END_DECLS
 

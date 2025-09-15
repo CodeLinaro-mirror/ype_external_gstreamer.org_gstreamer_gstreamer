@@ -27,7 +27,7 @@
 G_BEGIN_DECLS
 
 #define GST_TYPE_OMX_MPEG2_VIDEO_DEC \
-  (gst_omx_mpeg2_video_get_type())
+  (gst_omx_mpeg2_video_dec_get_type())
 #define GST_OMX_MPEG2_VIDEO_DEC(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_OMX_MPEG2_VIDEO_DEC,GstOMXMPEG2VideoDec))
 #define GST_OMX_MPEG2_VIDEO_DEC_CLASS(klass) \

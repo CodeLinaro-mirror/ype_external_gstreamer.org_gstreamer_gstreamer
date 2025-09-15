@@ -31,9 +31,23 @@
 #include "gstomxvideo.h"
 
 #include <gst/allocators/gstdmabuf.h>
+#include <unistd.h>
+#include <sys/mman.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_omx_buffer_pool_debug_category);
 #define GST_CAT_DEFAULT gst_omx_buffer_pool_debug_category
+
+#define BUFFER_POOL_CLOSE_FD(fd) do {                                      \
+  if (fd >= 0) {                                                           \
+    int ret = close (fd);                                                  \
+    if (ret != 0) {                                                        \
+      int e = errno;                                                       \
+      GST_ERROR ("close(fd %d), ret %d, error: %s", fd, ret, strerror(e)); \
+    }                                                                      \
+  } else {                                                                 \
+    GST_ERROR ("fd %d is invalid", fd);                                    \
+  }                                                                        \
+} while (0)
 
 enum
 {
@@ -180,6 +194,24 @@ gst_omx_buffer_pool_start (GstBufferPool * bpool)
       GST_BUFFER_POOL_CLASS (gst_omx_buffer_pool_parent_class)->start (bpool);
 }
 
+static void
+_gst_omx_gbm_bo_destroy (gpointer data, gpointer user_data)
+{
+  GstOMXBufferPool *pool = (GstOMXBufferPool *) user_data;
+  struct gbm_bo *gbmbo = (struct gbm_bo *)data;
+
+  GST_INFO ("destroying gbm bo: %p", gbmbo);
+  pool->gbm_bo_destroy(gbmbo);
+}
+
+static void
+_gst_omx_dup_fd_close (gpointer data, gpointer user_data)
+{
+  gint fd = data;
+  GST_INFO ("closing dup fd: %d", fd);
+  BUFFER_POOL_CLOSE_FD(fd);
+}
+
 static gboolean
 gst_omx_buffer_pool_stop (GstBufferPool * bpool)
 {
@@ -189,6 +221,20 @@ gst_omx_buffer_pool_stop (GstBufferPool * bpool)
   g_ptr_array_set_size (pool->buffers, 0);
 
   GST_DEBUG_OBJECT (pool, "deactivating OMX allocator");
+
+  /* for imported gbm, no need to close meta fd,
+   * just need to call gbm_bo_destroy and close fd*/
+  if(pool->port->multi_resolution) {
+    GstOMXAllocator *allocator = pool->allocator;
+
+    g_ptr_array_foreach (allocator->dup_fds, (GFunc) _gst_omx_dup_fd_close, NULL);
+    g_ptr_array_free (allocator->dup_fds, TRUE);
+    allocator->dup_fds = NULL;
+    g_ptr_array_foreach (allocator->gbmbos, (GFunc) _gst_omx_gbm_bo_destroy, pool);
+    g_ptr_array_free (allocator->gbmbos, TRUE);
+    allocator->gbmbos = NULL;
+  }
+
   gst_omx_allocator_set_active (pool->allocator, FALSE);
 
   /* ensure all memories have been deallocated;
@@ -196,8 +242,12 @@ gst_omx_buffer_pool_stop (GstBufferPool * bpool)
    * and therefore are in use somewhere else in the pipeline */
   gst_omx_allocator_wait_inactive (pool->allocator);
 
-  GST_DEBUG_OBJECT (pool, "deallocate OMX buffers");
-  gst_omx_port_deallocate_buffers (pool->port);
+  /* For multi-resolution stream, deallocate buffers before.
+   * Now using dup fd, so, no need to wait all buffers came back.*/
+  if (!pool->port->multi_resolution) {
+    GST_DEBUG_OBJECT (pool, "deallocate OMX buffers");
+    gst_omx_port_deallocate_buffers (pool->port);
+  }
 
   if (pool->caps)
     gst_caps_unref (pool->caps);
@@ -366,6 +416,62 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
       return GST_FLOW_ERROR;
     }
 #endif
+    if (pool->port->multi_resolution) {
+      struct gbm_bo * gbmbo = NULL;
+      struct gbm_import_fd_data gbmbufinfo = {0};
+      guint gbmflags = GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING;
+      GstOMXAllocator *allocator = pool->allocator;
+      int fd = -1;
+
+      gbmbufinfo.fd = pPMEMInfo->pmem_fd;
+      gbmbufinfo.width = pool->port->port_def.format.video.nFrameWidth;
+      gbmbufinfo.height = pool->port->port_def.format.video.nFrameHeight;
+      switch (GST_VIDEO_INFO_FORMAT (&pool->video_info)) {
+        case GST_VIDEO_FORMAT_NV12:
+          gbmbufinfo.format = GBM_FORMAT_NV12;
+          break;
+        case GST_VIDEO_FORMAT_NV12_10LE32:
+          gbmbufinfo.format = GBM_FORMAT_YCbCr_420_TP10_UBWC;//decoder TP10 always should have ubwc
+          break;
+        case GST_VIDEO_FORMAT_P010_10LE:
+          gbmbufinfo.format = GBM_FORMAT_P010;
+          break;
+        default:
+          GST_WARNING_OBJECT (pool, "Unknown format %d, set gbmbuf format to nv12",
+              GST_VIDEO_INFO_FORMAT (&pool->video_info));
+          gbmbufinfo.format = GBM_FORMAT_NV12;
+      }
+
+      if (GST_VIDEO_INFO_FORMAT (&pool->video_info) == GST_VIDEO_FORMAT_NV12 && pool->is_ubwc) {
+        gbmflags |= GBM_BO_USAGE_UBWC_ALIGNED_QTI;
+      }
+      if (!(pool->gbmdev && pool->gbm_bo_import && pool->gbm_bo_get_fd && pool->gbm_bo_destroy)) {
+        GST_ERROR_OBJECT(pool, "Error: some gbm pointer is NULL %p, %p %p %p",
+            pool->gbmdev, pool->gbm_bo_import, pool->gbm_bo_get_fd, pool->gbm_bo_destroy);
+        return GST_FLOW_ERROR;
+      }
+      gbmbo = pool->gbm_bo_import (pool->gbmdev, GBM_BO_IMPORT_FD, &gbmbufinfo, gbmflags);
+      GST_INFO_OBJECT(pool, "import gbm(dev %p, input pixel fd %d, meta fd %d, "
+          "flags 0x%08x) ret %p", pool->gbmdev, pPMEMInfo->pmem_fd,
+          pPMEMInfo->pmeta_fd, gbmflags, gbmbo);
+      if (gbmbo == NULL) {
+        GST_ERROR_OBJECT(pool, "call gbm_bo_import(%p, GBM_BO_IMPORT_FD) fail, ret NULL, "
+            "input pixel fd %d, meta fd %d, flags 0x%08x", pool->gbmdev, pPMEMInfo->pmem_fd,
+            pPMEMInfo->pmeta_fd, gbmflags);
+        return GST_FLOW_ERROR;
+      }
+      fd = pool->gbm_bo_get_fd(gbmbo);
+      GST_INFO_OBJECT(pool, "imported gbmbo %p, get imported fd %d", gbmbo, fd);
+      if (fd < 0) {
+        GST_ERROR_OBJECT(pool, "got imported fd from gbmbo %p fail, ret %d", gbmbo, fd);
+        pool->gbm_bo_destroy(gbmbo);
+        return GST_FLOW_ERROR;
+      }
+
+      g_ptr_array_index (allocator->dup_fds, pool->current_buffer_index) = fd;
+      g_ptr_array_index (allocator->gbmbos, pool->current_buffer_index) = gbmbo;
+    }
+
     buf = gst_buffer_new ();
 
     switch (GST_VIDEO_INFO_FORMAT (&pool->video_info)) {
@@ -444,15 +550,7 @@ gst_omx_buffer_pool_alloc_buffer (GstBufferPool * bpool,
           GST_VIDEO_INFO_HEIGHT (&pool->video_info),
           GST_VIDEO_INFO_N_PLANES (&pool->video_info), offset, stride);
       if (meta) {
-        meta->offset[2] = GST_MAKE_FOURCC('Q', 'a','U','T');
-        meta->offset[3] = pPMEMInfo ? pPMEMInfo->size : 0;
-        meta->stride[2] = pPMEMInfo ? pPMEMInfo->pmem_fd : -1;
-#ifdef USE_GBM
-        meta->stride[3] = pPMEMInfo ? pPMEMInfo->pmeta_fd: -1;
-#else
-        meta->stride[3] = -1;
-#endif
-        GST_INFO_OBJECT (pool,"Add ion-gbm fd %d, meta fd %d, sz %d with signature QaUT in GstVideoMeta\n", meta->stride[2], meta->stride[3], meta->offset[3]);
+        GST_INFO_OBJECT (pool,"Add GstVideoMeta Successfully");
       } else {
         GST_ERROR_OBJECT (pool, "gst_buffer_add_video_meta_full() fail, ret NULL");
         return GST_FLOW_ERROR;
@@ -619,16 +717,40 @@ on_allocator_omxbuf_released (GstOMXAllocator * allocator,
 {
   OMX_ERRORTYPE err;
 
-  if (pool->port->port_def.eDir == OMX_DirOutput && omx_buf && !omx_buf->used &&
-      !pool->deactivated) {
-    /* Release back to the port, can be filled again */
-    err = gst_omx_port_release_buffer (pool->port, omx_buf);
+  if (pool->port->port_def.eDir == OMX_DirOutput) {
+      if (pool->port->multi_resolution) {
+        if (omx_buf && !omx_buf->used && !pool->deactivated
+            && pool->port->settings_cookie == omx_buf->settings_cookie
+            && pool->port->fmt_settings_cookie == omx_buf->fmt_settings_cookie) {
+          /* Release back to the port, can be filled again */
+          GST_DEBUG_OBJECT (pool, "gst_omx_port_release_buffer omx_buf:%p",
+              omx_buf->omx_buf->pPlatformPrivate);
+          gboolean port_actived;
+          GstOMXPort *port = pool->port;
+          g_mutex_lock (&port->comp->lock);
 
-    if (err != OMX_ErrorNone) {
-      GST_ELEMENT_ERROR (pool->element, LIBRARY, SETTINGS, (NULL),
-          ("Failed to relase output buffer to component: %s (0x%08x)",
-              gst_omx_error_to_string (err), err));
-    }
+          port_actived = port->buffers && g_ptr_array_find (port->buffers, omx_buf, NULL);
+          g_mutex_unlock (&port->comp->lock);
+          if (port_actived) {
+            err = gst_omx_port_release_buffer (port, omx_buf);
+
+            if (err != OMX_ErrorNone) {
+              GST_ELEMENT_ERROR (pool->element, LIBRARY, SETTINGS, (NULL),
+                  ("Failed to relase output buffer to component: %s (0x%08x)",
+                      gst_omx_error_to_string (err), err));
+            }
+          }
+        }
+      } else if (omx_buf && !omx_buf->used && !pool->deactivated) {
+        /* Release back to the port, can be filled again */
+        err = gst_omx_port_release_buffer (pool->port, omx_buf);
+
+        if (err != OMX_ErrorNone) {
+          GST_ELEMENT_ERROR (pool->element, LIBRARY, SETTINGS, (NULL),
+              ("Failed to relase output buffer to component: %s (0x%08x)",
+                  gst_omx_error_to_string (err), err));
+        }
+      }
   } else if (pool->port->port_def.eDir == OMX_DirInput) {
     gst_omx_port_requeue_buffer (pool->port, omx_buf);
   }
@@ -693,7 +815,8 @@ gst_omx_buffer_pool_init (GstOMXBufferPool * pool)
 
 GstBufferPool *
 gst_omx_buffer_pool_new (GstElement * element, GstOMXComponent * component,
-    GstOMXPort * port, GstOMXBufferMode output_mode)
+    GstOMXPort * port, GstOMXBufferMode output_mode, gboolean is_ubwc,
+    void* gbm_lib, struct gbm_device* gbmdev)
 {
   GstOMXBufferPool *pool;
 
@@ -702,7 +825,14 @@ gst_omx_buffer_pool_new (GstElement * element, GstOMXComponent * component,
   pool->component = gst_omx_component_ref (component);
   pool->port = port;
   pool->output_mode = output_mode;
+  pool->is_ubwc = is_ubwc;
   pool->allocator = gst_omx_allocator_new (component, port);
+  if (gbm_lib && gbmdev) {
+    pool->gbmdev = gbmdev;
+    pool->gbm_bo_import = dlsym(gbm_lib, "gbm_bo_import");
+    pool->gbm_bo_get_fd = dlsym(gbm_lib, "gbm_bo_get_fd");
+    pool->gbm_bo_destroy = dlsym(gbm_lib, "gbm_bo_destroy");
+  }
 
   g_signal_connect_object (pool->allocator, "omxbuf-released",
       (GCallback) on_allocator_omxbuf_released, pool, 0);

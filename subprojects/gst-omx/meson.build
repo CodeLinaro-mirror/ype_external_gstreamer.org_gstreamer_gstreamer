@@ -246,6 +246,8 @@ omx_enable_target_6155 = get_option('enable-target-6155')
 extra_video_headers = ''
 # Check for optional OpenMAX extension headers
 
+# USE_GBM is for OMX_QCOMExtns.h
+# In gst-omx internal code, USE_GBM is removed, always assume omx use gbm buf
 if cc.has_header (
     'gbm.h',
     args : gst_omx_args,
