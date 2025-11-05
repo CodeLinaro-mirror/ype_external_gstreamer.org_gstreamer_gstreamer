@@ -108,6 +108,7 @@ enum
   PROP_DYNAMIC_INPUT_BUFFER,
   PROP_MULTI_RESOLUTION,
   PROP_INPUT_BUFFER_SIZE_LIMIT,
+  PROP_NEGOTIATE_MODE_RECONFIG_OUTPUT,
 };
 
 #define GST_OMX_VIDEO_DEC_INTERNAL_ENTROPY_BUFFERS_DEFAULT (5)
@@ -119,6 +120,7 @@ enum
 #define GST_OMX_VIDEO_DEC_DYNAMIC_BUFFER_MODE_DEFAULT          (0)
 #define GST_OMX_VIDEO_DEC_MULTI_RESOLUTION_DEFAULT          (TRUE)
 #define GST_OMX_VIDEO_DEC_INPUT_BUFFER_SIZE_LIMIT_DEFAULT      (0)
+#define GST_OMX_VIDEO_DEC_NEGOTIATE_MODE_RECONFIG_OUTPUT_DEFAULT  (0)
 /* class initialization */
 
 #define DEBUG_INIT \
@@ -503,6 +505,9 @@ gst_omx_video_dec_set_property (GObject * object, guint prop_id,
     case PROP_INPUT_BUFFER_SIZE_LIMIT:
       self->input_buffer_size_limit = g_value_get_uint (value);
       break;
+    case PROP_NEGOTIATE_MODE_RECONFIG_OUTPUT:
+      self->negotiate_mode_reconfig_output = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -544,6 +549,9 @@ gst_omx_video_dec_get_property (GObject * object, guint prop_id,
       break;
     case PROP_INPUT_BUFFER_SIZE_LIMIT:
       g_value_set_uint (value, self->input_buffer_size_limit);
+      break;
+    case PROP_NEGOTIATE_MODE_RECONFIG_OUTPUT:
+      g_value_set_uint (value, self->negotiate_mode_reconfig_output);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -630,6 +638,13 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
           "If set to non-zero, omx will set this input size to video driver, "
           "if this size is smaller than video driver calculated input buf size, video driver/omx will adopt this size to allocate buf and check whether input buf's size >= this size.",
           0, G_MAXUINT, GST_OMX_VIDEO_DEC_INPUT_BUFFER_SIZE_LIMIT_DEFAULT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_READY));
+  g_object_class_install_property (gobject_class, PROP_NEGOTIATE_MODE_RECONFIG_OUTPUT,
+      g_param_spec_uint ("negotiate-mode-reconfig-output", "negotiate mode when reconfiguring output",
+          "If set to 0, just follow original gst-omx logic; "
+          "if set to 1, won't negotiate when reconfiguring output.",
+          0, 1, GST_OMX_VIDEO_DEC_NEGOTIATE_MODE_RECONFIG_OUTPUT_DEFAULT,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
           GST_PARAM_MUTABLE_READY));
   element_class->change_state =
@@ -2291,34 +2306,78 @@ gst_omx_video_dec_reconfigure_output_port (GstOMXVideoDec * self)
       (guint) rect.nWidth,
       (guint) rect.nHeight);
 
-  state =
-      gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER (self),
-      format, interlace_mode, rect.nWidth,
-      rect.nHeight, self->input_state);
-
-  g_assert(state);
-  /* add dmabuf memory and compression caps features */
-  if (state->caps)
-    gst_caps_unref (state->caps);
-  state->caps = gst_video_info_to_caps (&state->info);
-  add_caps_dmabuf_memory_feature (state->caps);
-  if (self->isubwc)
-    gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
-        "ubwc", NULL);
-  else
-    gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
-        "linear", NULL);
-
-  if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+  if (0 == self->negotiate_mode_reconfig_output) {
+    state =
+        gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER (self),
+        format, interlace_mode, rect.nWidth,
+        rect.nHeight, self->input_state);
+    g_assert(state);
+    /* add dmabuf memory and compression caps features */
+    if (state->caps)
+      gst_caps_unref (state->caps);
+    state->caps = gst_video_info_to_caps (&state->info);
+    add_caps_dmabuf_memory_feature (state->caps);
+    if (self->isubwc)
+      gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+          "ubwc", NULL);
+    else
+      gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+          "linear", NULL);
+    if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+      gst_video_codec_state_unref (state);
+      GST_ERROR_OBJECT (self, "Failed to negotiate");
+      err = OMX_ErrorUndefined;
+      GST_VIDEO_DECODER_STREAM_UNLOCK (self);
+      goto done;
+    }
     gst_video_codec_state_unref (state);
-    GST_ERROR_OBJECT (self, "Failed to negotiate");
-    err = OMX_ErrorUndefined;
-    GST_VIDEO_DECODER_STREAM_UNLOCK (self);
-    goto done;
+  } else {
+    if (format != port->last_format || interlace_mode != port->last_interlace_mode
+        || rect.nWidth != port->last_rect_width || rect.nHeight != port->last_rect_height) {
+      state =
+          gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER (self),
+          format, interlace_mode, rect.nWidth,
+          rect.nHeight, self->input_state);
+
+      g_assert(state);
+      /* add dmabuf memory and compression caps features */
+      if (state->caps)
+        gst_caps_unref (state->caps);
+      state->caps = gst_video_info_to_caps (&state->info);
+      add_caps_dmabuf_memory_feature (state->caps);
+      if (self->isubwc)
+        gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+            "ubwc", NULL);
+      else
+        gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+            "linear", NULL);
+
+      if (!port->output_setup) {
+        if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+          gst_video_codec_state_unref (state);
+          GST_ERROR_OBJECT (self, "Failed to negotiate");
+          err = OMX_ErrorUndefined;
+          GST_VIDEO_DECODER_STREAM_UNLOCK (self);
+          goto done;
+        }
+        port->output_setup = TRUE;
+      } else {
+        /*
+          * Can't negotiate now because there is some output buffer needed to render.
+          * It will negotiate in gst_video_decoder_finish_frame().
+        */
+        GST_DEBUG_OBJECT (self,
+            "Can't negotiate now because there is some output buffer needed to render");
+      }
+
+      port->last_format = format;
+      port->last_interlace_mode = interlace_mode;
+      port->last_rect_width = rect.nWidth;
+      port->last_rect_height = rect.nHeight;
+
+      gst_video_codec_state_unref (state);
+    }
   }
-
-  gst_video_codec_state_unref (state);
-
   GST_VIDEO_DECODER_STREAM_UNLOCK (self);
 
 #if defined (HAVE_GST_GL)
@@ -2645,47 +2704,100 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
           (guint) rect.nHeight);
       interlace_mode = gst_omx_video_dec_get_output_interlace_info (self);
 
-      state =
-          gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER
-          (self), format, interlace_mode, rect.nWidth,
-          rect.nHeight, self->input_state);
-
-      g_assert(state);
-      /* add dmabuf memory and compression caps features */
-      if (state->caps)
-        gst_caps_unref (state->caps);
-      state->caps = gst_video_info_to_caps (&state->info);
-      add_caps_dmabuf_memory_feature (state->caps);
-      if (self->isubwc)
-        gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
-            "ubwc", NULL);
-      else
-        gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
-            "linear", NULL);
-
-      /* Take framerate and pixel-aspect-ratio from sinkpad caps */
-
-      if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
-        if (buf)
-          gst_omx_port_release_buffer (port, buf);
+      if (0 == self->negotiate_mode_reconfig_output) {
+        state =
+            gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER
+            (self), format, interlace_mode, rect.nWidth,
+            rect.nHeight, self->input_state);
+        g_assert(state);
+        /* add dmabuf memory and compression caps features */
+        if (state->caps)
+          gst_caps_unref (state->caps);
+        state->caps = gst_video_info_to_caps (&state->info);
+        add_caps_dmabuf_memory_feature (state->caps);
+        if (self->isubwc)
+          gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+              "ubwc", NULL);
+        else
+          gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+              "linear", NULL);
+        /* Take framerate and pixel-aspect-ratio from sinkpad caps */
+        if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+          if (buf)
+            gst_omx_port_release_buffer (port, buf);
+          gst_video_codec_state_unref (state);
+          goto caps_failed;
+        }
+        if (state) {
+          GST_DEBUG_OBJECT (self, "decoder state caps: %" GST_PTR_FORMAT, state->caps);
+        }else{
+          GST_ERROR_OBJECT (self, "decoder state is NULL, something error!");
+        }
+#ifdef _QTI_DMABUFFER_MODE_
+        /*allocate omx buffer to match the output buffers*/
+        if (!self->out_port_pool && self->dmabuf)
+          gst_omx_video_dec_allocate_outport_omx_buffers (self);
+#endif
         gst_video_codec_state_unref (state);
-        goto caps_failed;
-      }
+      } else {
+        if (format != port->last_format || interlace_mode != port->last_interlace_mode
+            || rect.nWidth != port->last_rect_width || rect.nHeight != port->last_rect_height) {
+          state =
+              gst_video_decoder_set_interlaced_output_state (GST_VIDEO_DECODER
+              (self), format, interlace_mode, rect.nWidth,
+              rect.nHeight, self->input_state);
 
-      if (state) {
-        GST_DEBUG_OBJECT (self, "decoder state caps: %" GST_PTR_FORMAT, state->caps);
-      }else{
-        GST_ERROR_OBJECT (self, "decoder state is NULL, something error!");
-      }
+          g_assert(state);
+          /* add dmabuf memory and compression caps features */
+          if (state->caps)
+            gst_caps_unref (state->caps);
+          state->caps = gst_video_info_to_caps (&state->info);
+          add_caps_dmabuf_memory_feature (state->caps);
+          if (self->isubwc)
+            gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+                "ubwc", NULL);
+          else
+            gst_caps_set_simple (state->caps, "compression", G_TYPE_STRING,
+                "linear", NULL);
+
+          /* Take framerate and pixel-aspect-ratio from sinkpad caps */
+          if (!port->output_setup) {
+            if (!gst_video_decoder_negotiate (GST_VIDEO_DECODER (self))) {
+              if (buf)
+                gst_omx_port_release_buffer (port, buf);
+              gst_video_codec_state_unref (state);
+              goto caps_failed;
+            }
+            port->output_setup = TRUE;
+          } else {
+            /*
+            * Can't negotiate now because there is some output buffer needed to render.
+            * It will negotiate in gst_video_decoder_finish_frame().
+            */
+            GST_DEBUG_OBJECT (self,
+                "Can't negotiate now because there is some output buffer needed to render");
+          }
+
+          port->last_format = format;
+          port->last_interlace_mode = interlace_mode;
+          port->last_rect_width = rect.nWidth;
+          port->last_rect_height = rect.nHeight;
+
+          if (state) {
+            GST_DEBUG_OBJECT (self, "decoder state caps: %" GST_PTR_FORMAT, state->caps);
+          }else{
+            GST_ERROR_OBJECT (self, "decoder state is NULL, something error!");
+          }
 
 #ifdef _QTI_DMABUFFER_MODE_
-      /*allocate omx buffer to match the output buffers*/
-      if (!self->out_port_pool && self->dmabuf)
-        gst_omx_video_dec_allocate_outport_omx_buffers (self);
+          /*allocate omx buffer to match the output buffers*/
+          if (!self->out_port_pool && self->dmabuf)
+            gst_omx_video_dec_allocate_outport_omx_buffers (self);
 #endif
 
-      gst_video_codec_state_unref (state);
-
+          gst_video_codec_state_unref (state);
+        }
+      }
       GST_VIDEO_DECODER_STREAM_UNLOCK (self);
     }
 
@@ -3779,6 +3891,15 @@ gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
   if (needs_disable && !is_format_change) {
     GST_DEBUG_OBJECT (self,
         "Already running and caps did not change the format");
+    if (self->input_state)
+      gst_video_codec_state_unref (self->input_state);
+    self->input_state = gst_video_codec_state_ref (state);
+    return TRUE;
+  }
+
+  if (self->negotiate_mode_reconfig_output && self->dec_out_port->output_setup) {
+    GST_INFO_OBJECT (self,
+        "Already negotiated, don't need to reallocate input and output buffer");
     if (self->input_state)
       gst_video_codec_state_unref (self->input_state);
     self->input_state = gst_video_codec_state_ref (state);

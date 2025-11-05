@@ -381,6 +381,11 @@ struct _GstOMXPort {
   gboolean enc_share_frame_buffer;
   guint dynamic_input_buffer_mode;
   gboolean multi_resolution;
+  GstVideoFormat last_format;
+  GstVideoInterlaceMode last_interlace_mode;
+  OMX_U32 last_rect_width;
+  OMX_U32 last_rect_height;
+  gboolean output_setup;
 };
 
 struct _GstOMXComponent {

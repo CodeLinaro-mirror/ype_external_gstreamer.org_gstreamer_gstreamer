@@ -127,6 +127,7 @@ struct _GstOMXVideoDec
   gboolean secure;
   gboolean multi_resolution;
   guint input_buffer_size_limit;
+  guint negotiate_mode_reconfig_output;
 };
 
 struct _GstOMXVideoDecClass
