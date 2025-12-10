@@ -1391,6 +1391,7 @@ gst_omx_component_add_port (GstOMXComponent * comp, guint32 index)
   port->disabled_pending = FALSE;
   port->eos = FALSE;
   port->using_pool = FALSE;
+  port->output_setup = FALSE;
 
   if (port->port_def.eDir == OMX_DirInput)
     comp->n_in_ports++;
